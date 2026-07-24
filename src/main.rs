@@ -72,6 +72,18 @@ impl Default for ServerSettings {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct NotificationSettings {
+    pub discord_webhook: Option<String>,
+    #[serde(default = "default_live_message")]
+    pub live_message: String,
+    pub webhook_url: Option<String>,
+}
+
+fn default_live_message() -> String {
+    "Stream is LIVE".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TargetConfig {
     pub name: String,
@@ -90,6 +102,9 @@ pub struct AppConfig {
     pub server: ServerSettings,
 
     #[serde(default)]
+    pub notifications: NotificationSettings,
+
+    #[serde(default)]
     pub targets: Vec<TargetConfig>,
 }
 
@@ -102,27 +117,23 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Strict validation to enforce fail-closed security and configuration guarantees
+    /// Validate enabled target URLs (allows 0 enabled targets for ingest-only mode)
     pub fn validate(&self) -> Result<()> {
-        let active_targets: Vec<_> = self.targets.iter().filter(|t| t.enabled).collect();
-        if active_targets.is_empty() {
-            bail!("No enabled target destinations configured in config file. Define at least one [[targets]] entry.");
-        }
-
-        for target in active_targets {
-            let url = target.url.trim();
-            if url.is_empty() {
-                bail!("Target '{}' has an empty RTMP URL.", target.name);
-            }
-            if !url.starts_with("rtmp://") && !url.starts_with("rtmps://") {
-                bail!(
-                    "Target '{}' has invalid URL '{}'. Must start with rtmp:// or rtmps://",
-                    target.name,
-                    url
-                );
+        for target in &self.targets {
+            if target.enabled {
+                let url = target.url.trim();
+                if url.is_empty() {
+                    bail!("Target '{}' has an empty RTMP URL.", target.name);
+                }
+                if !url.starts_with("rtmp://") && !url.starts_with("rtmps://") {
+                    bail!(
+                        "Target '{}' has invalid URL '{}'. Must start with rtmp:// or rtmps://",
+                        target.name,
+                        url
+                    );
+                }
             }
         }
-
         Ok(())
     }
 }
@@ -135,9 +146,11 @@ struct Metrics {
 
 struct ProxyState {
     metrics: Arc<Metrics>,
+    notifications: NotificationSettings,
     targets: Vec<TargetConfig>,
     active_relays: Mutex<HashMap<String, Vec<Child>>>,
     listen_port: u16,
+    http_client: reqwest::Client,
 }
 
 struct ProxyHandler {
@@ -162,14 +175,22 @@ impl RtmpHandler for ProxyHandler {
         info!(
             session_id = %ctx.session_id,
             stream_key = %stream_key,
-            "Stream published from OBS"
+            "Stream published from client"
         );
 
-        let active_targets: Vec<_> = self.state.targets.iter().filter(|t| t.enabled).collect();
+        let active_targets: Vec<_> = self.state.targets.iter().filter(|t| t.enabled).cloned().collect();
+
+        // Dispatch going-live webhook notifications in background
+        let state = Arc::clone(&self.state);
+        let key_clone = stream_key.clone();
+        let target_names: Vec<String> = active_targets.iter().map(|t| t.name.clone()).collect();
+        tokio::spawn(async move {
+            dispatch_notifications(&state, &key_clone, &target_names).await;
+        });
 
         if active_targets.is_empty() {
-            warn!("No active targets configured for stream relay.");
-            return AuthResult::Reject("No active target destinations configured".into());
+            info!("No active targets enabled. Ingesting stream locally without forwarding.");
+            return AuthResult::Accept;
         }
 
         let mut relays = self.state.active_relays.lock().await;
@@ -220,6 +241,70 @@ impl RtmpHandler for ProxyHandler {
         info!(session_id = %ctx.session_id, "Client disconnected");
         self.state.metrics.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
+}
+
+async fn dispatch_notifications(state: &Arc<ProxyState>, stream_key: &str, target_names: &[String]) {
+    let msg = &state.notifications.live_message;
+
+    // 1. Dispatch Discord Webhook if configured
+    if let Some(ref discord_url) = state.notifications.discord_webhook {
+        if !discord_url.trim().is_empty() {
+            info!("Sending Discord going-live webhook notification");
+            let target_str = if target_names.is_empty() {
+                "Ingest-only mode".to_string()
+            } else {
+                target_names.join(", ")
+            };
+
+            let payload = serde_json::json!({
+                "content": msg,
+                "embeds": [
+                    {
+                        "title": "🔴 Stream Started",
+                        "description": format!("Stream key `{}` is now live!", stream_key),
+                        "color": 15258703,
+                        "fields": [
+                            {
+                                "name": "Broadcasting Targets",
+                                "value": target_str,
+                                "inline": true
+                            }
+                        ],
+                        "timestamp": chrono_iso_now()
+                    }
+                ]
+            });
+
+            if let Err(e) = state.http_client.post(discord_url).json(&payload).send().await {
+                warn!(error = %e, "Failed to send Discord webhook notification");
+            }
+        }
+    }
+
+    // 2. Dispatch Generic Webhook URL if configured
+    if let Some(ref webhook_url) = state.notifications.webhook_url {
+        if !webhook_url.trim().is_empty() {
+            info!(url = %webhook_url, "Sending generic stream.started webhook notification");
+            let payload = serde_json::json!({
+                "event": "stream.started",
+                "stream_key": stream_key,
+                "message": msg,
+                "targets": target_names,
+                "timestamp": chrono_iso_now()
+            });
+
+            if let Err(e) = state.http_client.post(webhook_url).json(&payload).send().await {
+                warn!(error = %e, "Failed to send generic webhook notification");
+            }
+        }
+    }
+}
+
+fn chrono_iso_now() -> String {
+    // Generate ISO-8601 timestamp string
+    let now = std::time::SystemTime::now();
+    let dt: std::time::Duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    format!("{}", dt.as_secs())
 }
 
 fn install_systemd(work_dir: &Path, config_path: &Path) -> Result<()> {
@@ -287,9 +372,12 @@ async fn main() -> Result<()> {
     config.validate()?;
 
     let metrics = Arc::new(Metrics::default());
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
 
     info!("Starting RTMP Stream Multiplexer v{}", env!("CARGO_PKG_VERSION"));
-    info!("Listening for OBS on {}", config.server.listen);
+    info!("Listening for RTMP stream ingest on {}", config.server.listen);
 
     for t in &config.targets {
         info!(name = %t.name, enabled = t.enabled, "Target configured");
@@ -297,9 +385,11 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(ProxyState {
         metrics: Arc::clone(&metrics),
+        notifications: config.notifications,
         targets: config.targets,
         active_relays: Mutex::new(HashMap::new()),
         listen_port: config.server.listen.port(),
+        http_client,
     });
 
     // Spawn Health Check HTTP Server on localhost

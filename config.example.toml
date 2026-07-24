@@ -2,7 +2,17 @@
 
 [server]
 listen = "0.0.0.0:1935"
-health_listen = "0.0.0.0:8080"
+health_listen = "127.0.0.1:8080"
+
+[notifications]
+# Optional Discord Webhook URL (posts a rich Embed with stream status)
+discord_webhook = "https://discord.com/api/webhooks/YOUR_DISCORD_WEBHOOK_URL"
+
+# Custom going live message
+live_message = "We are LIVE"
+
+# Optional custom generic HTTP POST webhook endpoint
+webhook_url = ""
 
 # Target Destinations
 # You can add as many target destinations as you need. Set enabled = false to temporarily disable a target.
