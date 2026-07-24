@@ -1,0 +1,29 @@
+# Pulumi
+.pulumi/
+*.lock
+
+# Go binaries and build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE and OS environment files
+.env
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Rust
+target/**
+
+# Stream Multiplexer Config Secrets
+config.toml
+*.key
+*.pem
+

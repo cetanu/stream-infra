@@ -1,0 +1,17 @@
+[Unit]
+Description=RTMP Stream Multiplexer Service
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={WORK_DIR}
+ExecStart={EXEC_START} --config {CONFIG_PATH}
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+Environment=RUST_LOG=rtmp_proxy=info,rtmp_rs=info
+
+[Install]
+WantedBy=multi-user.target

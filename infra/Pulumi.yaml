@@ -1,0 +1,3 @@
+name: stream-infra
+runtime: go
+description: Pulumi Go infrastructure project for Vultr cloud resources
