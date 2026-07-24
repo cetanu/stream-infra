@@ -1,6 +1,5 @@
 set -euo pipefail
 
-# Config content MUST be supplied via RTMP_CONFIG environment variable or $1 argument
 CONFIG_CONTENT="${RTMP_CONFIG:-"${1:-""}"}"
 REPO_SLUG="${GITHUB_REPOSITORY:-"cetanu/stream-infra"}"
 TARGET_DIR="/opt/rtmp-proxy"
@@ -27,3 +26,5 @@ chmod +x "${BINARY_PATH}"
 "${BINARY_PATH}" install-systemd \
     --work-dir "${TARGET_DIR}" \
     --config-path "${CONFIG_PATH}"
+
+ufw allow 1935/tcp || true
