@@ -1,4 +1,3 @@
-#!/bin/bash
 set -euo pipefail
 
 # Config content MUST be supplied via RTMP_CONFIG environment variable or $1 argument

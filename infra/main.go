@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"strconv"
@@ -50,9 +51,9 @@ func main() {
 			return fmt.Errorf("'rtmpConfig' configuration secret is required. Run: pulumi config set rtmpConfig --secret \"$(cat ../config.toml)\"")
 		}
 
-		userData := fmt.Sprintf("export RTMP_CONFIG=%q\n%s", customConfig, startupScript)
+		rawUserData := fmt.Sprintf("#!/bin/bash\nexport RTMP_CONFIG=%q\n%s", customConfig, startupScript)
+		encodedUserData := base64.StdEncoding.EncodeToString([]byte(rawUserData))
 
-		// 1. Private Network / VPC
 		vpc, err := vultr.NewVpc(ctx, "stream-vpc", &vultr.VpcArgs{
 			Description:  pulumi.String("VPC for RTMP stream-infra services"),
 			Region:       pulumi.String(region),
@@ -89,7 +90,7 @@ func main() {
 			OsId:            pulumi.Int(OsUbuntu2204LTSx64),
 			Label:           pulumi.String("rtmp-proxy-node"),
 			Hostname:        pulumi.String("rtmp-proxy-1"),
-			UserData:        pulumi.String(userData),
+			UserData:        pulumi.String(encodedUserData),
 			VpcIds:          pulumi.StringArray{vpc.ID()},
 			FirewallGroupId: fwGroup.ID(),
 			EnableIpv6:      pulumi.Bool(true),
