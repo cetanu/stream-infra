@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -101,6 +101,30 @@ impl AppConfig {
             .with_context(|| format!("Failed to parse TOML configuration from {:?}", path.as_ref()))?;
         Ok(config)
     }
+
+    /// Strict validation to enforce fail-closed security and configuration guarantees
+    pub fn validate(&self) -> Result<()> {
+        let active_targets: Vec<_> = self.targets.iter().filter(|t| t.enabled).collect();
+        if active_targets.is_empty() {
+            bail!("No enabled target destinations configured in config file. Define at least one [[targets]] entry.");
+        }
+
+        for target in active_targets {
+            let url = target.url.trim();
+            if url.is_empty() {
+                bail!("Target '{}' has an empty RTMP URL.", target.name);
+            }
+            if !url.starts_with("rtmp://") && !url.starts_with("rtmps://") {
+                bail!(
+                    "Target '{}' has invalid URL '{}'. Must start with rtmp:// or rtmps://",
+                    target.name,
+                    url
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -143,40 +167,40 @@ impl RtmpHandler for ProxyHandler {
 
         let active_targets: Vec<_> = self.state.targets.iter().filter(|t| t.enabled).collect();
 
-        if !active_targets.is_empty() {
-            let mut relays = self.state.active_relays.lock().await;
-            let mut children = Vec::new();
-            let source_url = format!("rtmp://127.0.0.1:{}/live/{}", self.state.listen_port, stream_key);
-
-            for target in active_targets {
-                info!(name = %target.name, url = %target.url, "Launching stream relay forwarder");
-
-                let child = tokio::process::Command::new("ffmpeg")
-                    .args([
-                        "-loglevel", "warning",
-                        "-i", &source_url,
-                        "-c", "copy",
-                        "-f", "flv",
-                        &target.url,
-                    ])
-                    .spawn();
-
-                match child {
-                    Ok(c) => {
-                        info!(name = %target.name, "Relay process spawned successfully");
-                        children.push(c);
-                    }
-                    Err(e) => {
-                        error!(name = %target.name, error = %e, "Failed to spawn ffmpeg relay process. Ensure ffmpeg is installed.");
-                    }
-                }
-            }
-
-            relays.insert(stream_key, children);
-        } else {
-            info!("No enabled forward targets configured. Ingesting stream without multiplexing.");
+        if active_targets.is_empty() {
+            warn!("No active targets configured for stream relay.");
+            return AuthResult::Reject("No active target destinations configured".into());
         }
 
+        let mut relays = self.state.active_relays.lock().await;
+        let mut children = Vec::new();
+        let source_url = format!("rtmp://127.0.0.1:{}/live/{}", self.state.listen_port, stream_key);
+
+        for target in active_targets {
+            info!(name = %target.name, url = %target.url, "Launching stream relay forwarder");
+
+            let child = tokio::process::Command::new("ffmpeg")
+                .args([
+                    "-loglevel", "warning",
+                    "-i", &source_url,
+                    "-c", "copy",
+                    "-f", "flv",
+                    &target.url,
+                ])
+                .spawn();
+
+            match child {
+                Ok(c) => {
+                    info!(name = %target.name, "Relay process spawned successfully");
+                    children.push(c);
+                }
+                Err(e) => {
+                    error!(name = %target.name, error = %e, "Failed to spawn ffmpeg relay process. Ensure ffmpeg is installed.");
+                }
+            }
+        }
+
+        relays.insert(stream_key, children);
         AuthResult::Accept
     }
 
@@ -251,13 +275,16 @@ async fn main() -> Result<()> {
         return install_systemd(&work_dir, &config_path);
     }
 
-    let config = if cli.config.exists() {
-        info!(path = ?cli.config, "Loading configuration file");
-        AppConfig::load_from_file(&cli.config)?
-    } else {
-        warn!(path = ?cli.config, "Config file not found, using default settings");
-        AppConfig::default()
-    };
+    if !cli.config.exists() {
+        bail!(
+            "Configuration file '{:?}' does not exist. Create the config file or specify --config <path>",
+            cli.config
+        );
+    }
+
+    info!(path = ?cli.config, "Loading configuration file");
+    let config = AppConfig::load_from_file(&cli.config)?;
+    config.validate()?;
 
     let metrics = Arc::new(Metrics::default());
 
@@ -275,7 +302,7 @@ async fn main() -> Result<()> {
         listen_port: config.server.listen.port(),
     });
 
-    // Spawn Health Check HTTP Server
+    // Spawn Health Check HTTP Server on localhost
     let health_addr = config.server.health_listen;
     let health_metrics = Arc::clone(&metrics);
     tokio::spawn(async move {

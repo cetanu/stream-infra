@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Config content can be supplied via RTMP_CONFIG environment variable or $1 argument
+# Config content MUST be supplied via RTMP_CONFIG environment variable or $1 argument
 CONFIG_CONTENT="${RTMP_CONFIG:-"${1:-""}"}"
 REPO_SLUG="${GITHUB_REPOSITORY:-"vsyrakis/stream-infra"}"
 TARGET_DIR="/opt/rtmp-proxy"
@@ -16,7 +16,13 @@ apt-get install -y ffmpeg curl ca-certificates
 # Ensure target runtime directory exists
 mkdir -p "${TARGET_DIR}"
 
-# Write config.toml if config content is provided
+# Fail-Closed Check: Error out if no config.toml content is supplied
+if [ -z "${CONFIG_CONTENT}" ]; then
+    echo "No RTMP configuration content was supplied." >&2
+    echo "Please configure 'rtmpConfig' via Pulumi: pulumi config set rtmpConfig --secret \"\$(cat ../config.toml)\"" >&2
+    exit 1
+fi
+
 printf '%s\n' "${CONFIG_CONTENT}" > "${CONFIG_PATH}"
 chmod 600 "${CONFIG_PATH}"
 

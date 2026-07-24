@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -11,47 +12,45 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
 
-// Embed the startup bash script directly into the compiled Go binary
-//
 //go:embed scripts/startup.sh
 var startupScript string
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
-		// Load stack configuration
 		cfg := config.New(ctx, "")
 		region := cfg.Get("region")
 		if region == "" {
 			region = RegionNewJersey
 		}
 
-		// Configure IP whitelist for RTMP (1935/tcp)
 		allowedIp := cfg.Get("allowedIngressIp")
-		subnetIp := "0.0.0.0"
-		subnetSize := 0
+		if strings.TrimSpace(allowedIp) == "" {
+			return fmt.Errorf("'allowedIngressIp' configuration is required. Run: pulumi config set allowedIngressIp <YOUR_IP>")
+		}
 
-		if allowedIp != "" {
-			parts := strings.Split(allowedIp, "/")
+		subnetIp := strings.TrimSpace(allowedIp)
+		subnetSize := 32
+
+		if strings.Contains(subnetIp, "/") {
+			parts := strings.Split(subnetIp, "/")
 			subnetIp = parts[0]
-			if len(parts) > 1 {
-				if sz, err := strconv.Atoi(parts[1]); err == nil {
-					subnetSize = sz
-				} else {
-					subnetSize = 32
-				}
+			if sz, err := strconv.Atoi(parts[1]); err == nil && sz >= 0 && sz <= 32 {
+				subnetSize = sz
 			} else {
-				subnetSize = 32
+				return fmt.Errorf("Invalid CIDR prefix in 'allowedIngressIp': %q", allowedIp)
 			}
 		}
 
-		// Optional secret config.toml content passed via Pulumi config
-		// Example: pulumi config set rtmpConfig --secret "$(cat config.toml)"
-		customConfig := cfg.Get("rtmpConfig")
-		userData := startupScript
-
-		if customConfig != "" {
-			userData = fmt.Sprintf("export RTMP_CONFIG=%q\n%s", customConfig, startupScript)
+		if net.ParseIP(subnetIp) == nil {
+			return fmt.Errorf("'allowedIngressIp' %q is not a valid IPv4 address", subnetIp)
 		}
+
+		customConfig := cfg.Get("rtmpConfig")
+		if strings.TrimSpace(customConfig) == "" {
+			return fmt.Errorf("'rtmpConfig' configuration secret is required. Run: pulumi config set rtmpConfig --secret \"$(cat ../config.toml)\"")
+		}
+
+		userData := fmt.Sprintf("export RTMP_CONFIG=%q\n%s", customConfig, startupScript)
 
 		// 1. Private Network / VPC
 		vpc, err := vultr.NewVpc(ctx, "stream-vpc", &vultr.VpcArgs{
@@ -64,7 +63,6 @@ func main() {
 			return err
 		}
 
-		// 2. Firewall Group for RTMP Proxy & Multiplexer
 		fwGroup, err := vultr.NewFirewallGroup(ctx, "rtmp-fw-group", &vultr.FirewallGroupArgs{
 			Description: pulumi.String("Firewall rules for RTMP Proxy & Multiplexer"),
 		})
@@ -72,7 +70,6 @@ func main() {
 			return err
 		}
 
-		// Allow RTMP (1935/tcp) restricted to allowed IP subnet
 		_, err = vultr.NewFirewallRule(ctx, "fw-rule-rtmp", &vultr.FirewallRuleArgs{
 			FirewallGroupId: fwGroup.ID(),
 			Protocol:        pulumi.String("tcp"),
@@ -80,13 +77,12 @@ func main() {
 			Subnet:          pulumi.String(subnetIp),
 			SubnetSize:      pulumi.Int(subnetSize),
 			Port:            pulumi.String("1935"),
-			Notes:           pulumi.String("Allow inbound RTMP streaming"),
+			Notes:           pulumi.String("Allow inbound RTMP streaming from whitelisted IP"),
 		})
 		if err != nil {
 			return err
 		}
 
-		// 3. Compute Instance: $6/mo Cloud Compute node
 		server, err := vultr.NewInstance(ctx, "rtmp-proxy-node", &vultr.InstanceArgs{
 			Plan:            pulumi.String(PlanCloudCompute1vCPU1GB),
 			Region:          pulumi.String(region),
@@ -103,7 +99,6 @@ func main() {
 			return err
 		}
 
-		// Export outputs
 		ctx.Export("vpcId", vpc.ID())
 		ctx.Export("firewallGroupId", fwGroup.ID())
 		ctx.Export("instanceId", server.ID())
