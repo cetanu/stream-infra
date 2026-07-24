@@ -21,7 +21,7 @@ func main() {
 		cfg := config.New(ctx, "")
 		region := cfg.Get("region")
 		if region == "" {
-			region = RegionNewJersey
+			region = RegionSydney
 		}
 
 		allowedIp := cfg.Get("allowedIngressIp")
