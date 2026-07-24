@@ -51,7 +51,7 @@ func main() {
 			return fmt.Errorf("'rtmpConfig' configuration secret is required. Run: pulumi config set rtmpConfig --secret \"$(cat ../config.toml)\"")
 		}
 
-		rawUserData := fmt.Sprintf("#!/bin/bash\nexport RTMP_CONFIG=%q\n%s", customConfig, startupScript)
+		rawUserData := fmt.Sprintf("#!/bin/bash\nset -euo pipefail\n\nexport RTMP_CONFIG=$(cat <<'EOF_RTMP_CONFIG'\n%s\nEOF_RTMP_CONFIG\n)\n\n%s", customConfig, startupScript)
 		encodedUserData := base64.StdEncoding.EncodeToString([]byte(rawUserData))
 
 		vpc, err := vultr.NewVpc(ctx, "stream-vpc", &vultr.VpcArgs{
