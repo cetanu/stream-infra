@@ -1,5 +1,7 @@
 # Justfile for stream-infra
 
+set shell := ["bash", "-c"]
+
 # Default recipe: print available commands
 default:
     @just --list
@@ -26,6 +28,16 @@ check:
 run:
     cargo run
 
+update-conf:
+    #!/usr/bin/env bash
+    nvim config.toml
+    pushd infra
+    pulumi config set rtmpConfig --secret "$(< ../config.toml)"
+    popd
+
 # Deploy infrastructure to Vultr via Pulumi (syncs latest config.toml)
-deploy:
-    cd infra && pulumi config set rtmpConfig --secret "$(< ../config.toml)" && pulumi up
+deploy: update-conf
+    #!/usr/bin/env bash
+    pushd infra
+    pulumi up
+    popd
