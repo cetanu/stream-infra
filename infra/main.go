@@ -63,14 +63,14 @@ func main() {
 			return err
 		}
 
-		fwGroup, err := vultr.NewFirewallGroup(ctx, "rtmp-fw-group", &vultr.FirewallGroupArgs{
+		fwGroup, err := vultr.NewFirewallGroup(ctx, "stream-fw", &vultr.FirewallGroupArgs{
 			Description: pulumi.String("Firewall rules for RTMP Proxy & Multiplexer"),
 		})
 		if err != nil {
 			return err
 		}
 
-		_, err = vultr.NewFirewallRule(ctx, "fw-rule-rtmp", &vultr.FirewallRuleArgs{
+		_, err = vultr.NewFirewallRule(ctx, "stream-allow-rtmp", &vultr.FirewallRuleArgs{
 			FirewallGroupId: fwGroup.ID(),
 			Protocol:        pulumi.String("tcp"),
 			IpType:          pulumi.String("v4"),
@@ -83,7 +83,7 @@ func main() {
 			return err
 		}
 
-		server, err := vultr.NewInstance(ctx, "rtmp-proxy-node", &vultr.InstanceArgs{
+		server, err := vultr.NewInstance(ctx, "stream-rtmp-node", &vultr.InstanceArgs{
 			Plan:            pulumi.String(PlanCloudCompute1vCPU1GB),
 			Region:          pulumi.String(region),
 			OsId:            pulumi.Int(OsUbuntu2204LTSx64),
