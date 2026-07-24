@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Config content MUST be supplied via RTMP_CONFIG environment variable or $1 argument
 CONFIG_CONTENT="${RTMP_CONFIG:-"${1:-""}"}"
-REPO_SLUG="${GITHUB_REPOSITORY:-"vsyrakis/stream-infra"}"
+REPO_SLUG="${GITHUB_REPOSITORY:-"cetanu/stream-infra"}"
 TARGET_DIR="/opt/rtmp-proxy"
 BINARY_PATH="${TARGET_DIR}/rtmp-proxy"
 CONFIG_PATH="${TARGET_DIR}/config.toml"
