@@ -26,6 +26,6 @@ check:
 run:
     cargo run
 
-# Deploy infrastructure to Vultr via Pulumi
+# Deploy infrastructure to Vultr via Pulumi (syncs latest config.toml)
 deploy:
-    cd infra && pulumi up
+    cd infra && pulumi config set rtmpConfig --secret "$(< ../config.toml)" && pulumi up
