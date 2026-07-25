@@ -39,6 +39,9 @@ var setupRtmpProxyScript string
 //go:embed scripts/setup-rtmp-proxy.service
 var setupRtmpProxyService string
 
+//go:embed scripts/caddy.service
+var caddyService string
+
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
 		cfg := config.New(ctx, "")
@@ -82,6 +85,11 @@ func main() {
 			ddnsHost = "@"
 		}
 
+		fqdn := ddnsDomain
+		if ddnsHost != "@" {
+			fqdn = fmt.Sprintf("%s.%s", ddnsHost, ddnsDomain)
+		}
+
 		cc := CloudConfig{
 			PackageUpdate: true,
 			Packages: []string{
@@ -120,9 +128,22 @@ func main() {
 					Content:     updateDdnsService,
 					Permissions: "0644",
 				},
+				{
+					Path:        "/etc/caddy/Caddyfile",
+					Content:     fmt.Sprintf("%s {\n\treverse_proxy 127.0.0.1:3000\n}\n", fqdn),
+					Permissions: "0644",
+				},
+				{
+					Path:        "/etc/systemd/system/caddy.service",
+					Content:     caddyService,
+					Permissions: "0644",
+				},
 			},
 			RunCmd: []string{
+				"curl -fsSL 'https://caddyserver.com/api/download?os=linux&arch=amd64' -o /usr/local/bin/caddy",
+				"chmod +x /usr/local/bin/caddy",
 				"systemctl daemon-reload",
+				"systemctl enable --now caddy.service",
 				"systemctl enable --now setup-rtmp-proxy.service",
 				"systemctl enable --now update-ddns.service",
 			},
@@ -164,14 +185,27 @@ func main() {
 			return err
 		}
 
-		_, err = vultr.NewFirewallRule(ctx, "stream-allow-web", &vultr.FirewallRuleArgs{
+		_, err = vultr.NewFirewallRule(ctx, "stream-allow-http", &vultr.FirewallRuleArgs{
+			FirewallGroupId: fwGroup.ID(),
+			Protocol:        pulumi.String("tcp"),
+			IpType:          pulumi.String("v4"),
+			Subnet:          pulumi.String("0.0.0.0"),
+			SubnetSize:      pulumi.Int(0),
+			Port:            pulumi.String("80"),
+			Notes:           pulumi.String("Allow HTTP globally for Let's Encrypt ACME HTTP-01 challenge"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = vultr.NewFirewallRule(ctx, "stream-allow-https", &vultr.FirewallRuleArgs{
 			FirewallGroupId: fwGroup.ID(),
 			Protocol:        pulumi.String("tcp"),
 			IpType:          pulumi.String("v4"),
 			Subnet:          pulumi.String(subnetIp),
 			SubnetSize:      pulumi.Int(subnetSize),
-			Port:            pulumi.String("3000"),
-			Notes:           pulumi.String("Allow inbound Web UI access from whitelisted IP"),
+			Port:            pulumi.String("443"),
+			Notes:           pulumi.String("Allow HTTPS from whitelisted IP"),
 		})
 		if err != nil {
 			return err
