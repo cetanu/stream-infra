@@ -29,11 +29,6 @@ impl DiscordNotifier {
             target_names.join(", ")
         };
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
         let payload = serde_json::json!({
             "content": self.live_message,
             "embeds": [
@@ -47,8 +42,7 @@ impl DiscordNotifier {
                             "value": target_str,
                             "inline": true
                         }
-                    ],
-                    "timestamp": format!("{}", now)
+                    ]
                 }
             ]
         });
