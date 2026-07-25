@@ -1,0 +1,13 @@
+[Unit]
+Description=Update Namecheap Dynamic DNS
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/update-ddns
+ExecStart=/usr/local/bin/update-ddns.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

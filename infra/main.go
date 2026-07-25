@@ -10,10 +10,34 @@ import (
 	"github.com/dirien/pulumi-vultr/sdk/v2/go/vultr"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
+	"gopkg.in/yaml.v3"
 )
 
-//go:embed scripts/startup.sh
-var startupScript string
+type CloudConfig struct {
+	PackageUpdate bool        `yaml:"package_update"`
+	Packages      []string    `yaml:"packages"`
+	WriteFiles    []WriteFile `yaml:"write_files,omitempty"`
+	RunCmd        []string    `yaml:"runcmd"`
+}
+
+type WriteFile struct {
+	Path        string `yaml:"path"`
+	Content     string `yaml:"content"`
+	Permissions string `yaml:"permissions,omitempty"`
+	Encoding    string `yaml:"encoding,omitempty"`
+}
+
+//go:embed scripts/update-ddns.sh
+var updateDdnsScript string
+
+//go:embed scripts/update-ddns.service
+var updateDdnsService string
+
+//go:embed scripts/setup-rtmp-proxy.sh
+var setupRtmpProxyScript string
+
+//go:embed scripts/setup-rtmp-proxy.service
+var setupRtmpProxyService string
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
@@ -50,7 +74,65 @@ func main() {
 			return fmt.Errorf("'rtmpConfig' configuration secret is required. Run: pulumi config set rtmpConfig --secret \"$(cat ../config.toml)\"")
 		}
 
-		userData := fmt.Sprintf("#!/bin/bash\nexport RTMP_CONFIG=%q\n%s", customConfig, startupScript)
+		ddnsHost := cfg.Get("ddnsHost")
+		ddnsDomain := cfg.Get("ddnsDomain")
+		ddnsPassword := cfg.Get("ddnsPassword")
+		
+		if ddnsHost == "" {
+			ddnsHost = "@"
+		}
+
+		cc := CloudConfig{
+			PackageUpdate: true,
+			Packages: []string{
+				"ffmpeg",
+				"curl",
+				"ca-certificates",
+			},
+			WriteFiles: []WriteFile{
+				{
+					Path:        "/opt/rtmp-proxy/config.toml",
+					Content:     customConfig,
+					Permissions: "0600",
+				},
+				{
+					Path:        "/usr/local/bin/setup-rtmp-proxy.sh",
+					Content:     setupRtmpProxyScript,
+					Permissions: "0755",
+				},
+				{
+					Path:        "/etc/systemd/system/setup-rtmp-proxy.service",
+					Content:     setupRtmpProxyService,
+					Permissions: "0644",
+				},
+				{
+					Path:        "/etc/default/update-ddns",
+					Content:     fmt.Sprintf("DDNS_HOST=%q\nDDNS_DOMAIN=%q\nDDNS_PASSWORD=%q\n", ddnsHost, ddnsDomain, ddnsPassword),
+					Permissions: "0600",
+				},
+				{
+					Path:        "/usr/local/bin/update-ddns.sh",
+					Content:     updateDdnsScript,
+					Permissions: "0755",
+				},
+				{
+					Path:        "/etc/systemd/system/update-ddns.service",
+					Content:     updateDdnsService,
+					Permissions: "0644",
+				},
+			},
+			RunCmd: []string{
+				"systemctl daemon-reload",
+				"systemctl enable --now setup-rtmp-proxy.service",
+				"systemctl enable --now update-ddns.service",
+			},
+		}
+
+		ccBytes, err := yaml.Marshal(cc)
+		if err != nil {
+			return err
+		}
+		userData := "#cloud-config\n" + string(ccBytes)
 
 		vpc, err := vultr.NewVpc(ctx, "stream-vpc", &vultr.VpcArgs{
 			Description:  pulumi.String("VPC for RTMP stream-infra services"),
