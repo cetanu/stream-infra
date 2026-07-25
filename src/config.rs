@@ -11,6 +11,9 @@ pub struct ServerSettings {
 
     #[serde(default = "default_health_listen")]
     pub health_listen: SocketAddr,
+
+    #[serde(default = "default_api_listen")]
+    pub api_listen: SocketAddr,
 }
 
 fn default_listen() -> SocketAddr {
@@ -21,11 +24,16 @@ fn default_health_listen() -> SocketAddr {
     "127.0.0.1:8080".parse().unwrap()
 }
 
+fn default_api_listen() -> SocketAddr {
+    "0.0.0.0:3000".parse().unwrap()
+}
+
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
             listen: default_listen(),
             health_listen: default_health_listen(),
+            api_listen: default_api_listen(),
         }
     }
 }
@@ -70,9 +78,21 @@ impl AppConfig {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read configuration file: {:?}", path.as_ref()))?;
-        let config: AppConfig = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse TOML configuration from {:?}", path.as_ref()))?;
+        let config: AppConfig = toml::from_str(&content).with_context(|| {
+            format!(
+                "Failed to parse TOML configuration from {:?}",
+                path.as_ref()
+            )
+        })?;
         Ok(config)
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let content =
+            toml::to_string(self).with_context(|| "Failed to serialize AppConfig to TOML")?;
+        fs::write(path.as_ref(), content)
+            .with_context(|| format!("Failed to write configuration to {:?}", path.as_ref()))?;
+        Ok(())
     }
 
     /// Validate enabled target URLs (allows 0 enabled targets for ingest-only mode)

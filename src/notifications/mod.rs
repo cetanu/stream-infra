@@ -15,7 +15,11 @@ pub struct NotificationDispatcher {
 impl NotificationDispatcher {
     pub fn new(settings: &NotificationSettings, http_client: Client) -> Arc<Self> {
         let discord = settings.discord_webhook.as_ref().map(|url| {
-            DiscordNotifier::new(url.clone(), settings.live_message.clone(), http_client.clone())
+            DiscordNotifier::new(
+                url.clone(),
+                settings.live_message.clone(),
+                http_client.clone(),
+            )
         });
 
         let generic = settings.webhook_url.as_ref().map(|url| {

@@ -1,32 +1,35 @@
-use crate::config::TargetConfig;
+use crate::config::AppConfig;
 use crate::metrics::Metrics;
-use crate::notifications::NotificationDispatcher;
+use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Child;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 pub struct ProxyState {
     pub metrics: Arc<Metrics>,
-    pub dispatcher: Arc<NotificationDispatcher>,
-    pub targets: Vec<TargetConfig>,
+    pub config: Arc<RwLock<AppConfig>>,
+    pub http_client: Client,
     pub active_relays: Mutex<HashMap<String, Vec<Child>>>,
     pub listen_port: u16,
+    pub config_path: std::path::PathBuf,
 }
 
 impl ProxyState {
     pub fn new(
         metrics: Arc<Metrics>,
-        dispatcher: Arc<NotificationDispatcher>,
-        targets: Vec<TargetConfig>,
+        config: AppConfig,
+        http_client: Client,
         listen_port: u16,
+        config_path: std::path::PathBuf,
     ) -> Self {
         Self {
             metrics,
-            dispatcher,
-            targets,
+            config: Arc::new(RwLock::new(config)),
+            http_client,
             active_relays: Mutex::new(HashMap::new()),
             listen_port,
+            config_path,
         }
     }
 }

@@ -19,8 +19,14 @@ impl RtmpHandler for ProxyHandler {
             app = %params.app,
             "Client connected to RTMP Ingest"
         );
-        self.state.metrics.total_connections.fetch_add(1, Ordering::Relaxed);
-        self.state.metrics.active_connections.fetch_add(1, Ordering::Relaxed);
+        self.state
+            .metrics
+            .total_connections
+            .fetch_add(1, Ordering::Relaxed);
+        self.state
+            .metrics
+            .active_connections
+            .fetch_add(1, Ordering::Relaxed);
         AuthResult::Accept
     }
 
@@ -32,11 +38,22 @@ impl RtmpHandler for ProxyHandler {
             "Stream published from client"
         );
 
-        let active_targets: Vec<_> = self.state.targets.iter().filter(|t| t.enabled).cloned().collect();
+        let config = self.state.config.read().await;
+        let active_targets: Vec<_> = config
+            .targets
+            .iter()
+            .filter(|t| t.enabled)
+            .cloned()
+            .collect();
         let target_names: Vec<String> = active_targets.iter().map(|t| t.name.clone()).collect();
 
+        let dispatcher = crate::notifications::NotificationDispatcher::new(
+            &config.notifications,
+            self.state.http_client.clone(),
+        );
+        drop(config);
+
         // Dispatch notifications asynchronously
-        let dispatcher = Arc::clone(&self.state.dispatcher);
         let key_clone = stream_key.clone();
         tokio::spawn(async move {
             dispatcher.dispatch(&key_clone, &target_names).await;
@@ -49,17 +66,24 @@ impl RtmpHandler for ProxyHandler {
 
         let mut relays = self.state.active_relays.lock().await;
         let mut children = Vec::new();
-        let source_url = format!("rtmp://127.0.0.1:{}/live/{}", self.state.listen_port, stream_key);
+        let source_url = format!(
+            "rtmp://127.0.0.1:{}/live/{}",
+            self.state.listen_port, stream_key
+        );
 
         for target in active_targets {
             info!(name = %target.name, url = %target.url, "Launching stream relay forwarder");
 
             let child = tokio::process::Command::new("ffmpeg")
                 .args([
-                    "-loglevel", "warning",
-                    "-i", &source_url,
-                    "-c", "copy",
-                    "-f", "flv",
+                    "-loglevel",
+                    "warning",
+                    "-i",
+                    &source_url,
+                    "-c",
+                    "copy",
+                    "-f",
+                    "flv",
                     &target.url,
                 ])
                 .spawn();
@@ -93,6 +117,9 @@ impl RtmpHandler for ProxyHandler {
 
     async fn on_disconnect(&self, ctx: &SessionContext) {
         info!(session_id = %ctx.session_id, "Client disconnected");
-        self.state.metrics.active_connections.fetch_sub(1, Ordering::Relaxed);
+        self.state
+            .metrics
+            .active_connections
+            .fetch_sub(1, Ordering::Relaxed);
     }
 }

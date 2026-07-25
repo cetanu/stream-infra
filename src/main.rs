@@ -3,11 +3,12 @@ mod metrics;
 mod notifications;
 mod server;
 
+mod web;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use config::AppConfig;
 use metrics::{run_health_server, Metrics};
-use notifications::NotificationDispatcher;
 use server::{run_rtmp_server, state::ProxyState};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,8 +44,8 @@ enum Commands {
 }
 
 fn install_systemd(work_dir: &Path, config_path: &Path) -> Result<()> {
-    let current_exe = std::env::current_exe()
-        .context("Failed to determine path of current executable")?;
+    let current_exe =
+        std::env::current_exe().context("Failed to determine path of current executable")?;
 
     let unit_content = SYSTEMD_UNIT_TEMPLATE
         .replace("{WORK_DIR}", &work_dir.display().to_string())
@@ -91,7 +92,11 @@ async fn main() -> Result<()> {
 
     let cli = CliArgs::parse();
 
-    if let Some(Commands::InstallSystemd { work_dir, config_path }) = cli.command {
+    if let Some(Commands::InstallSystemd {
+        work_dir,
+        config_path,
+    }) = cli.command
+    {
         return install_systemd(&work_dir, &config_path);
     }
 
@@ -111,24 +116,41 @@ async fn main() -> Result<()> {
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let dispatcher = NotificationDispatcher::new(&config.notifications, http_client);
-
-    info!("Starting RTMP Stream Multiplexer v{}", env!("CARGO_PKG_VERSION"));
-    info!("Listening for RTMP stream ingest on {}", config.server.listen);
+    info!(
+        "Starting RTMP Stream Multiplexer v{}",
+        env!("CARGO_PKG_VERSION")
+    );
+    info!(
+        "Listening for RTMP stream ingest on {}",
+        config.server.listen
+    );
 
     for t in &config.targets {
         info!(name = %t.name, enabled = t.enabled, "Target configured");
     }
 
+    let web_addr = config.server.api_listen;
+    let listen_port = config.server.listen.port();
+    let config_path = cli.config.clone();
+
     let state = Arc::new(ProxyState::new(
         Arc::clone(&metrics),
-        dispatcher,
-        config.targets,
-        config.server.listen.port(),
+        config,
+        http_client,
+        listen_port,
+        config_path,
     ));
 
+    // Spawn Web Server
+    let web_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        if let Err(e) = crate::web::run_web_server(web_state, web_addr).await {
+            warn!("Web interface server error: {:#}", e);
+        }
+    });
+
     // Spawn Health Check HTTP Server on localhost
-    let health_addr = config.server.health_listen;
+    let health_addr = state.config.read().await.server.health_listen;
     let health_metrics = Arc::clone(&metrics);
     tokio::spawn(async move {
         if let Err(e) = run_health_server(health_addr, health_metrics).await {
@@ -137,5 +159,6 @@ async fn main() -> Result<()> {
     });
 
     // Run RTMP Server
-    run_rtmp_server(config.server.listen, state).await
+    let rtmp_listen = state.config.read().await.server.listen;
+    run_rtmp_server(rtmp_listen, state).await
 }

@@ -36,7 +36,13 @@ impl GenericWebhookNotifier {
             "timestamp": now
         });
 
-        if let Err(e) = self.http_client.post(&self.webhook_url).json(&payload).send().await {
+        if let Err(e) = self
+            .http_client
+            .post(&self.webhook_url)
+            .json(&payload)
+            .send()
+            .await
+        {
             warn!(error = %e, "Failed to send generic webhook notification");
         }
 
