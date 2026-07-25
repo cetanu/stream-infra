@@ -45,7 +45,6 @@ impl RtmpHandler for ProxyHandler {
             .filter(|t| t.enabled)
             .cloned()
             .collect();
-        let target_names: Vec<String> = active_targets.iter().map(|t| t.name.clone()).collect();
 
         let dispatcher = crate::notifications::NotificationDispatcher::new(
             &config.notifications,
@@ -55,8 +54,9 @@ impl RtmpHandler for ProxyHandler {
 
         // Dispatch notifications asynchronously
         let key_clone = stream_key.clone();
+        let targets_clone = active_targets.clone();
         tokio::spawn(async move {
-            dispatcher.dispatch(&key_clone, &target_names).await;
+            dispatcher.dispatch(&key_clone, &targets_clone).await;
         });
 
         if active_targets.is_empty() {

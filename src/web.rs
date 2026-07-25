@@ -74,12 +74,11 @@ async fn update_config(
 async fn test_webhooks(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
     let config = state.config.read().await;
     let active_targets: Vec<_> = config.targets.iter().filter(|t| t.enabled).cloned().collect();
-    let target_names: Vec<String> = active_targets.iter().map(|t| t.name.clone()).collect();
     
     let dispatcher = crate::notifications::NotificationDispatcher::new(&config.notifications, state.http_client.clone());
     drop(config);
 
-    dispatcher.dispatch("test_stream_webhook_123", &target_names).await;
+    dispatcher.dispatch("test_stream_webhook_123", &active_targets).await;
 
     (StatusCode::OK, "Webhooks test dispatched")
 }

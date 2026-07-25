@@ -54,6 +54,8 @@ fn default_live_message() -> String {
 pub struct TargetConfig {
     pub name: String,
     pub url: String,
+    #[serde(default)]
+    pub public_url: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }

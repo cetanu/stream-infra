@@ -29,13 +29,13 @@ impl NotificationDispatcher {
         Arc::new(Self { discord, generic })
     }
 
-    pub async fn dispatch(&self, stream_key: &str, target_names: &[String]) {
+    pub async fn dispatch(&self, stream_key: &str, targets: &[crate::config::TargetConfig]) {
         if let Some(ref d) = self.discord {
-            let _ = d.notify(stream_key, target_names).await;
+            let _ = d.notify(stream_key, targets).await;
         }
 
         if let Some(ref g) = self.generic {
-            let _ = g.notify(stream_key, target_names).await;
+            let _ = g.notify(stream_key, targets).await;
         }
     }
 }

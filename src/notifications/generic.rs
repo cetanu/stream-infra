@@ -17,7 +17,7 @@ impl GenericWebhookNotifier {
         }
     }
 
-    pub async fn notify(&self, stream_key: &str, target_names: &[String]) -> Result<()> {
+    pub async fn notify(&self, stream_key: &str, targets: &[crate::config::TargetConfig]) -> Result<()> {
         if self.webhook_url.trim().is_empty() {
             return Ok(());
         }
@@ -28,11 +28,15 @@ impl GenericWebhookNotifier {
             .unwrap_or_default()
             .as_secs();
 
+        let target_names: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
+        let target_urls: Vec<String> = targets.iter().filter_map(|t| t.public_url.clone()).collect();
+
         let payload = serde_json::json!({
             "event": "stream.started",
             "stream_key": stream_key,
             "message": self.live_message,
             "targets": target_names,
+            "public_urls": target_urls,
             "timestamp": now
         });
 

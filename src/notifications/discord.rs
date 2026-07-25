@@ -17,32 +17,38 @@ impl DiscordNotifier {
         }
     }
 
-    pub async fn notify(&self, stream_key: &str, target_names: &[String]) -> Result<()> {
+    pub async fn notify(&self, _stream_key: &str, targets: &[crate::config::TargetConfig]) -> Result<()> {
         if self.webhook_url.trim().is_empty() {
             return Ok(());
         }
 
         info!("Sending Discord going-live webhook notification");
-        let target_str = if target_names.is_empty() {
-            "Ingest-only mode".to_string()
+
+        let mut links = Vec::new();
+        for target in targets {
+            if let Some(url) = &target.public_url {
+                if !url.trim().is_empty() {
+                    links.push(format!("[{}]({})", target.name, url.trim()));
+                }
+            }
+        }
+
+        let description = if links.is_empty() {
+            "The stream has started.".to_string()
         } else {
-            target_names.join(", ")
+            format!("The stream has started.\n\n**Watch live on:**\n{}", links.join("\n"))
         };
 
         let payload = serde_json::json!({
             "content": self.live_message,
+            "allowed_mentions": {
+                "parse": ["everyone", "roles", "users"]
+            },
             "embeds": [
                 {
-                    "title": "🔴 Stream Started",
-                    "description": format!("Stream key `{}` is now live!", stream_key),
-                    "color": 15258703,
-                    "fields": [
-                        {
-                            "name": "Broadcasting Targets",
-                            "value": target_str,
-                            "inline": true
-                        }
-                    ]
+                    "title": "🔴 We are LIVE",
+                    "description": description,
+                    "color": 15258703
                 }
             ]
         });
