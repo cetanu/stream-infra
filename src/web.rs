@@ -20,6 +20,7 @@ pub async fn run_web_server(
         .route("/api/config", post(update_config))
         .route("/api/test-webhooks", post(test_webhooks))
         .route("/api/test-stream", post(test_stream))
+        .route("/api/metrics", get(get_metrics))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -105,4 +106,29 @@ async fn test_stream(State(state): State<Arc<ProxyState>>) -> impl IntoResponse 
     });
 
     (StatusCode::OK, "Test stream initiated (15s)")
+}
+
+#[derive(serde::Serialize)]
+struct WebMetrics {
+    active_connections: u64,
+    total_connections: u64,
+    active_streams: usize,
+    active_relays: usize,
+}
+
+async fn get_metrics(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    let active_connections = state.metrics.active_connections.load(std::sync::atomic::Ordering::Relaxed);
+    let total_connections = state.metrics.total_connections.load(std::sync::atomic::Ordering::Relaxed);
+    
+    let relays_guard = state.active_relays.lock().await;
+    let active_streams = relays_guard.len();
+    let active_relays = relays_guard.values().map(|v| v.len()).sum();
+    drop(relays_guard);
+
+    Json(WebMetrics {
+        active_connections,
+        total_connections,
+        active_streams,
+        active_relays,
+    })
 }

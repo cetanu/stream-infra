@@ -325,6 +325,46 @@
             border-radius: 8px;
             border: 1px dashed var(--border);
         }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            transition: var(--transition);
+        }
+        
+        .metric-card:hover {
+            border-color: var(--border);
+            transform: translateY(-2px);
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--accent);
+            line-height: 1.2;
+            margin-bottom: 0.25rem;
+        }
+
+        .metric-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
     </style>
 </head>
 <body>
@@ -335,6 +375,26 @@
     </header>
 
     <div class="container">
+        <!-- Metrics Dashboard -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-value" id="metric_streams">0</div>
+                <div class="metric-label">Active Streams</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="metric_relays">0</div>
+                <div class="metric-label">Active Relays</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="metric_active_conn">0</div>
+                <div class="metric-label">Active Connections</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="metric_total_conn">0</div>
+                <div class="metric-label">Total Connections</div>
+            </div>
+        </div>
+
         <form id="configForm">
             
             <!-- Server Settings -->
@@ -611,6 +671,25 @@
 
         // Initial load
         fetchConfig();
+        
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/api/metrics');
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('metric_streams').textContent = data.active_streams;
+                    document.getElementById('metric_relays').textContent = data.active_relays;
+                    document.getElementById('metric_active_conn').textContent = data.active_connections;
+                    document.getElementById('metric_total_conn').textContent = data.total_connections;
+                }
+            } catch (err) {
+                console.error('Failed to fetch metrics', err);
+            }
+        }
+
+        // Poll metrics every 2 seconds
+        setInterval(fetchMetrics, 2000);
+        fetchMetrics();
     </script>
 </body>
 </html>
