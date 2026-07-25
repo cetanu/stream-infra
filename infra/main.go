@@ -164,6 +164,19 @@ func main() {
 			return err
 		}
 
+		_, err = vultr.NewFirewallRule(ctx, "stream-allow-web", &vultr.FirewallRuleArgs{
+			FirewallGroupId: fwGroup.ID(),
+			Protocol:        pulumi.String("tcp"),
+			IpType:          pulumi.String("v4"),
+			Subnet:          pulumi.String(subnetIp),
+			SubnetSize:      pulumi.Int(subnetSize),
+			Port:            pulumi.String("3000"),
+			Notes:           pulumi.String("Allow inbound Web UI access from whitelisted IP"),
+		})
+		if err != nil {
+			return err
+		}
+
 		server, err := vultr.NewInstance(ctx, "stream-rtmp-node", &vultr.InstanceArgs{
 			Plan:            pulumi.String(PlanCloudCompute1vCPU1GB),
 			Region:          pulumi.String(region),
