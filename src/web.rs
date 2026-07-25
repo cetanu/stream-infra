@@ -18,6 +18,8 @@ pub async fn run_web_server(
         .route("/", get(serve_index))
         .route("/api/config", get(get_config))
         .route("/api/config", post(update_config))
+        .route("/api/test-webhooks", post(test_webhooks))
+        .route("/api/test-stream", post(test_stream))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -66,4 +68,41 @@ async fn update_config(
         StatusCode::OK,
         "Configuration updated successfully".to_string(),
     )
+}
+
+async fn test_webhooks(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    let active_targets: Vec<_> = config.targets.iter().filter(|t| t.enabled).cloned().collect();
+    let target_names: Vec<String> = active_targets.iter().map(|t| t.name.clone()).collect();
+    
+    let dispatcher = crate::notifications::NotificationDispatcher::new(&config.notifications, state.http_client.clone());
+    drop(config);
+
+    dispatcher.dispatch("test_stream_webhook_123", &target_names).await;
+
+    (StatusCode::OK, "Webhooks test dispatched")
+}
+
+async fn test_stream(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    let listen_port = state.listen_port;
+    let url = format!("rtmp://127.0.0.1:{}/live/test_stream", listen_port);
+    
+    tokio::spawn(async move {
+        tracing::info!("Starting 15s test stream via ffmpeg to local ingest...");
+        let _ = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-re",
+                "-f", "lavfi", "-i", "testsrc=duration=15:size=1280x720:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=1000:duration=15",
+                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "128k",
+                "-f", "flv",
+                &url,
+            ])
+            .output()
+            .await;
+        tracing::info!("Test stream finished.");
+    });
+
+    (StatusCode::OK, "Test stream initiated (15s)")
 }

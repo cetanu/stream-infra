@@ -404,6 +404,16 @@
             </div>
 
             <div class="actions-panel">
+                <div style="flex: 1; display: flex; gap: 1rem;">
+                    <button type="button" class="btn-secondary" onclick="testWebhooks()" id="testWebhooksBtn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                        Test Webhooks
+                    </button>
+                    <button type="button" class="btn-secondary" onclick="testStream()" id="testStreamBtn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Test Stream (15s)
+                    </button>
+                </div>
                 <button type="button" class="btn-secondary" onclick="fetchConfig()">Revert</button>
                 <button type="submit" class="btn-primary" id="saveBtn">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
@@ -417,6 +427,34 @@
 
     <script>
         let currentTargets = [];
+
+        async function testWebhooks() {
+            const btn = document.getElementById('testWebhooksBtn');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/test-webhooks', { method: 'POST' });
+                if (res.ok) showToast('Webhook test dispatched!');
+                else showToast('Failed to test webhooks', 'error');
+            } catch (err) {
+                showToast('Network error', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function testStream() {
+            const btn = document.getElementById('testStreamBtn');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/test-stream', { method: 'POST' });
+                if (res.ok) showToast('Test stream running for 15s!');
+                else showToast('Failed to start test stream', 'error');
+            } catch (err) {
+                showToast('Network error', 'error');
+            } finally {
+                setTimeout(() => btn.disabled = false, 15000);
+            }
+        }
 
         async function fetchConfig() {
             try {
