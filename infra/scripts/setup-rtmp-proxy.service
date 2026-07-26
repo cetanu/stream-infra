@@ -2,11 +2,14 @@
 Description=Setup RTMP Proxy
 Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/setup-rtmp-proxy.sh
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10s
 
 [Install]
 WantedBy=multi-user.target

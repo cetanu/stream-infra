@@ -10,10 +10,9 @@ without handwritten JavaScript. Its unified chat inbox combines messages from
 multiple platforms into a bounded queue, presenting one message at a time until
 it is acknowledged.
 
-Application configuration and chat state are persisted in SQLite. The
-production infrastructure is managed with Pulumi on Vultr, where the database
-lives on retained Block Storage independently of the replaceable compute
-instance.
+Application configuration and chat state use SQLite. The production
+infrastructure is managed with Pulumi on Vultr; application state is managed
+separately from the deployment and is not provisioned as Block Storage.
 
 ## Components
 
@@ -22,4 +21,4 @@ instance.
 - Twitch EventSub and YouTube Live chat ingestion
 - SQLite-backed configuration and chat queue
 - Caddy TLS termination
-- Pulumi-managed Vultr compute, networking, firewall, and Block Storage
+- Pulumi-managed Vultr compute, networking, and firewall

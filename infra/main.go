@@ -91,13 +91,6 @@ func main() {
 		ddnsHost := cfg.Get("ddnsHost")
 		ddnsDomain := cfg.Get("ddnsDomain")
 		ddnsPassword := cfg.RequireSecret("ddnsPassword")
-		stateVolumeSizeGb := cfg.GetInt("stateVolumeSizeGb")
-		if stateVolumeSizeGb == 0 {
-			stateVolumeSizeGb = 10
-		}
-		if stateVolumeSizeGb < 10 {
-			return fmt.Errorf("'stateVolumeSizeGb' must be at least 10")
-		}
 
 		if ddnsHost == "" {
 			ddnsHost = "@"
@@ -119,7 +112,6 @@ func main() {
 						"ffmpeg",
 						"curl",
 						"ca-certificates",
-						"e2fsprogs",
 						"ufw",
 					},
 					WriteFiles: []WriteFile{
@@ -191,9 +183,13 @@ func main() {
 					RunCmd: []string{
 						"curl -fsSL 'https://caddyserver.com/api/download?os=linux&arch=amd64' -o /usr/local/bin/caddy",
 						"chmod +x /usr/local/bin/caddy",
+						"ufw allow 1935/tcp || true",
+						"ufw allow 80/tcp || true",
+						"ufw allow 443/tcp || true",
 						"systemctl daemon-reload",
 						"systemctl enable --now caddy.service",
-						"systemctl enable --now setup-rtmp-proxy.service",
+						"systemctl enable setup-rtmp-proxy.service",
+						"systemctl start --no-block setup-rtmp-proxy.service",
 						"systemctl enable --now update-rtmp-proxy.timer",
 						"systemctl enable --now update-ddns.service",
 					},
@@ -288,22 +284,10 @@ func main() {
 			EnableIpv6:      pulumi.Bool(true),
 			Backups:         pulumi.String("disabled"),
 		},
-			// Vultr can update user-data without replacing the instance. Keep the
-			// root disk (and Caddy's ACME storage) attached across deployments.
+			// Vultr can update user-data without replacing the instance, preserving
+			// Caddy's ACME storage on the instance root disk.
 			pulumi.DeleteBeforeReplace(true),
 		)
-		if err != nil {
-			return err
-		}
-
-		stateVolume, err := vultr.NewBlockStorage(ctx, "stream-state", &vultr.BlockStorageArgs{
-			AttachedToInstance: server.ID(),
-			BlockType:          pulumi.String("high_perf"),
-			Label:              pulumi.String("rtmp-proxy-state"),
-			Live:               pulumi.Bool(true),
-			Region:             pulumi.String(region),
-			SizeGb:             pulumi.Int(stateVolumeSizeGb),
-		}, pulumi.Protect(true), pulumi.RetainOnDelete(true))
 		if err != nil {
 			return err
 		}
@@ -312,8 +296,6 @@ func main() {
 		ctx.Export("firewallGroupId", fwGroup.ID())
 		ctx.Export("instanceId", server.ID())
 		ctx.Export("instanceMainIp", server.MainIp)
-		ctx.Export("stateVolumeId", stateVolume.ID())
-		ctx.Export("stateVolumeMountId", stateVolume.MountId)
 
 		return nil
 	})

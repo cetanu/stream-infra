@@ -9,7 +9,7 @@ mkdir -p "$(dirname "${binary_path}")"
 temporary_checksum="$(mktemp "${binary_path}.checksum.XXXXXX")"
 trap 'rm -f "${temporary_checksum}"' EXIT
 
-curl -fsSL --retry 3 --connect-timeout 10 \
+curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
     -H "Cache-Control: no-cache" \
     "${checksum_url}" -o "${temporary_checksum}"
 expected_hash="$(awk 'NF { print $1; exit }' "${temporary_checksum}")"
@@ -25,7 +25,7 @@ fi
 
 temporary_binary="$(mktemp "${binary_path}.new.XXXXXX")"
 trap 'rm -f "${temporary_checksum}" "${temporary_binary}"' EXIT
-curl -fsSL --retry 3 --connect-timeout 10 \
+curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
     -H "Cache-Control: no-cache" \
     "${release_url}" -o "${temporary_binary}"
 if [[ "$(sha256sum "${temporary_binary}" | awk '{print $1}')" != "${expected_hash}" ]]; then
