@@ -28,6 +28,12 @@ if [[ "$(sha256sum "${temporary_binary}" | awk '{print $1}')" != "${expected_has
 fi
 install -m 0755 "${temporary_binary}" "${work_dir}/rtmp-proxy"
 
+# Keep the host firewall aligned with the Vultr firewall group. The Vultr
+# firewall still provides the source-IP restrictions for RTMP and HTTPS.
+ufw allow 1935/tcp || true
+ufw allow 80/tcp || true
+ufw allow 443/tcp || true
+
 root_source="$(findmnt -n -o SOURCE /)"
 root_disk="$(lsblk -no PKNAME "${root_source}" | head -n 1)"
 if [[ -z "${root_disk}" ]]; then

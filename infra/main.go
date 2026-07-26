@@ -120,6 +120,7 @@ func main() {
 						"curl",
 						"ca-certificates",
 						"e2fsprogs",
+						"ufw",
 					},
 					WriteFiles: []WriteFile{
 						{
