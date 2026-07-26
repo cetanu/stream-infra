@@ -39,6 +39,15 @@ var setupRtmpProxyScript string
 //go:embed scripts/setup-rtmp-proxy.service
 var setupRtmpProxyService string
 
+//go:embed scripts/update-rtmp-proxy.sh
+var updateRtmpProxyScript string
+
+//go:embed scripts/update-rtmp-proxy.service
+var updateRtmpProxyService string
+
+//go:embed scripts/update-rtmp-proxy.timer
+var updateRtmpProxyTimer string
+
 //go:embed scripts/caddy.service
 var caddyService string
 
@@ -138,6 +147,21 @@ func main() {
 							Permissions: "0644",
 						},
 						{
+							Path:        "/usr/local/bin/update-rtmp-proxy.sh",
+							Content:     updateRtmpProxyScript,
+							Permissions: "0755",
+						},
+						{
+							Path:        "/etc/systemd/system/update-rtmp-proxy.service",
+							Content:     updateRtmpProxyService,
+							Permissions: "0644",
+						},
+						{
+							Path:        "/etc/systemd/system/update-rtmp-proxy.timer",
+							Content:     updateRtmpProxyTimer,
+							Permissions: "0644",
+						},
+						{
 							Path:        "/etc/default/update-ddns",
 							Content:     fmt.Sprintf("DDNS_HOST=%q\nDDNS_DOMAIN=%q\nDDNS_PASSWORD=%q\n", ddnsHost, ddnsDomain, ddnsSecret),
 							Permissions: "0600",
@@ -169,6 +193,7 @@ func main() {
 						"systemctl daemon-reload",
 						"systemctl enable --now caddy.service",
 						"systemctl enable --now setup-rtmp-proxy.service",
+						"systemctl enable --now update-rtmp-proxy.timer",
 						"systemctl enable --now update-ddns.service",
 					},
 				}
@@ -224,6 +249,19 @@ func main() {
 			return err
 		}
 
+		_, err = vultr.NewFirewallRule(ctx, "stream-allow-http-v6", &vultr.FirewallRuleArgs{
+			FirewallGroupId: fwGroup.ID(),
+			Protocol:        pulumi.String("tcp"),
+			IpType:          pulumi.String("v6"),
+			Subnet:          pulumi.String("::"),
+			SubnetSize:      pulumi.Int(0),
+			Port:            pulumi.String("80"),
+			Notes:           pulumi.String("Allow IPv6 HTTP globally for Let's Encrypt ACME HTTP-01 challenge"),
+		}, pulumi.IgnoreChanges([]string{"source"}))
+		if err != nil {
+			return err
+		}
+
 		_, err = vultr.NewFirewallRule(ctx, "stream-allow-https", &vultr.FirewallRuleArgs{
 			FirewallGroupId: fwGroup.ID(),
 			Protocol:        pulumi.String("tcp"),
@@ -249,8 +287,9 @@ func main() {
 			EnableIpv6:      pulumi.Bool(true),
 			Backups:         pulumi.String("disabled"),
 		},
+			// Vultr can update user-data without replacing the instance. Keep the
+			// root disk (and Caddy's ACME storage) attached across deployments.
 			pulumi.DeleteBeforeReplace(true),
-			pulumi.ReplaceOnChanges([]string{"userData"}),
 		)
 		if err != nil {
 			return err
