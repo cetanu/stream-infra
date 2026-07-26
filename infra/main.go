@@ -263,10 +263,23 @@ func main() {
 			FirewallGroupId: fwGroup.ID(),
 			Protocol:        pulumi.String("tcp"),
 			IpType:          pulumi.String("v4"),
-			Subnet:          pulumi.String(subnetIp),
-			SubnetSize:      pulumi.Int(subnetSize),
+			Subnet:          pulumi.String("0.0.0.0"),
+			SubnetSize:      pulumi.Int(0),
 			Port:            pulumi.String("443"),
-			Notes:           pulumi.String("Allow HTTPS from whitelisted IP"),
+			Notes:           pulumi.String("Allow HTTPS globally for web access and Twitch EventSub"),
+		}, pulumi.IgnoreChanges([]string{"source"}))
+		if err != nil {
+			return err
+		}
+
+		_, err = vultr.NewFirewallRule(ctx, "stream-allow-https-v6", &vultr.FirewallRuleArgs{
+			FirewallGroupId: fwGroup.ID(),
+			Protocol:        pulumi.String("tcp"),
+			IpType:          pulumi.String("v6"),
+			Subnet:          pulumi.String("::"),
+			SubnetSize:      pulumi.Int(0),
+			Port:            pulumi.String("443"),
+			Notes:           pulumi.String("Allow IPv6 HTTPS globally for web access and Twitch EventSub"),
 		}, pulumi.IgnoreChanges([]string{"source"}))
 		if err != nil {
 			return err
