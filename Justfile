@@ -49,6 +49,5 @@ deploy:
     #!/usr/bin/env bash
     set -euo pipefail
     pushd infra
-    pulumi config set deployNonce "$(date -u +%Y%m%dT%H%M%SZ)"
     pulumi up
     popd

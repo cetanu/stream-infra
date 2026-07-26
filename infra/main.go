@@ -78,10 +78,6 @@ func main() {
 			return fmt.Errorf("'webUsername' configuration is required")
 		}
 		webPassword := cfg.RequireSecret("webPassword")
-		deployNonce := strings.TrimSpace(cfg.Get("deployNonce"))
-		if deployNonce == "" {
-			deployNonce = "initial"
-		}
 
 		ddnsHost := cfg.Get("ddnsHost")
 		ddnsDomain := cfg.Get("ddnsDomain")
@@ -130,11 +126,6 @@ func main() {
 								password,
 							),
 							Permissions: "0600",
-						},
-						{
-							Path:        "/etc/stream-infra-deploy",
-							Content:     deployNonce + "\n",
-							Permissions: "0644",
 						},
 						{
 							Path:        "/usr/local/bin/setup-rtmp-proxy.sh",
@@ -215,7 +206,7 @@ func main() {
 			SubnetSize:      pulumi.Int(subnetSize),
 			Port:            pulumi.String("1935"),
 			Notes:           pulumi.String("Allow inbound RTMP streaming from whitelisted IP"),
-		})
+		}, pulumi.IgnoreChanges([]string{"source"}))
 		if err != nil {
 			return err
 		}
@@ -228,7 +219,7 @@ func main() {
 			SubnetSize:      pulumi.Int(0),
 			Port:            pulumi.String("80"),
 			Notes:           pulumi.String("Allow HTTP globally for Let's Encrypt ACME HTTP-01 challenge"),
-		})
+		}, pulumi.IgnoreChanges([]string{"source"}))
 		if err != nil {
 			return err
 		}
@@ -241,7 +232,7 @@ func main() {
 			SubnetSize:      pulumi.Int(subnetSize),
 			Port:            pulumi.String("443"),
 			Notes:           pulumi.String("Allow HTTPS from whitelisted IP"),
-		})
+		}, pulumi.IgnoreChanges([]string{"source"}))
 		if err != nil {
 			return err
 		}
@@ -267,7 +258,7 @@ func main() {
 
 		stateVolume, err := vultr.NewBlockStorage(ctx, "stream-state", &vultr.BlockStorageArgs{
 			AttachedToInstance: server.ID(),
-			BlockType:          pulumi.String("storageOpt"),
+			BlockType:          pulumi.String("high_perf"),
 			Label:              pulumi.String("rtmp-proxy-state"),
 			Live:               pulumi.Bool(true),
 			Region:             pulumi.String(region),
