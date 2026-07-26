@@ -5,6 +5,28 @@ listen = "0.0.0.0:1935"
 health_listen = "127.0.0.1:8080"
 api_listen = "0.0.0.0:3000"
 
+[web_auth]
+# Leave empty for local development without authentication. Pulumi deployments
+# seed these once from webUsername/webPassword when the persistent DB is empty.
+username = ""
+password = ""
+
+[chat]
+# Bearer token accepted by POST /api/chat/ingest.
+ingest_token = ""
+queue_capacity = 500
+
+# Twitch sends channel.chat.message events to /api/chat/twitch/eventsub.
+twitch_eventsub_secret = ""
+
+# Configure a YouTube API key and at most one selector.
+youtube_api_key = ""
+youtube_live_chat_id = ""
+youtube_video_id = ""
+youtube_channel_id = ""
+youtube_min_poll_interval_secs = 5
+youtube_adaptive_polling = true
+
 [notifications]
 # Optional Discord Webhook URL (posts a rich Embed with stream status)
 discord_webhook = "https://discord.com/api/webhooks/YOUR_DISCORD_WEBHOOK_URL"

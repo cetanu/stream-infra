@@ -2,6 +2,7 @@
 Description=RTMP Stream Multiplexer Service
 After=network.target network-online.target
 Wants=network-online.target
+RequiresMountsFor={STATE_DIR}
 
 [Service]
 Type=simple
@@ -12,7 +13,7 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65536
 Environment=RUST_LOG=rtmp_proxy=info,rtmp_rs=info
-EnvironmentFile=-{WORK_DIR}/rtmp-proxy.env
+EnvironmentFile=-/etc/rtmp-proxy.env
 
 [Install]
 WantedBy=multi-user.target

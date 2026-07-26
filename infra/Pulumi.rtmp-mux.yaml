@@ -9,3 +9,6 @@ config:
     secure: v1:FRlRnPnRxWeMOfp0:601g1/bl3q+LzFxa7BG0o4unIxwY65fhDIhA8edEFyyvlrMUsVjqTuiE9ltd76W4
   stream-infra:ddnsDomain: vsyrakis.dev
   stream-infra:ddnsHost: rtmp
+  stream-infra:webUsername: operator
+  stream-infra:webPassword:
+    secure: v1:aP7aFPtKionuqjN9:+unS0AflDYju37/OaHIKySJc0M03iiLRTyLSl/upKeTfREm29NzzcBHO5hX4yy8zuevk

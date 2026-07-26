@@ -1,5 +1,7 @@
 use crate::chat::{ChatInboxSnapshot, EnqueueOutcome, IncomingChatMessage};
-use crate::config::{AppConfig, NotificationSettings, ServerSettings, TargetConfig};
+use crate::config::{
+    AppConfig, ChatSettings, NotificationSettings, ServerSettings, TargetConfig, WebAuthSettings,
+};
 use crate::server::state::ProxyState;
 use anyhow::Context;
 use serde::Deserialize;
@@ -14,12 +16,13 @@ use topcoat::{
     Result,
 };
 
+pub mod auth;
 pub mod components;
 pub mod twitch;
 use components::{
-    actions_panel::actions_panel, chat_inbox::chat_inbox, config_transfer::config_transfer,
-    metrics::metrics_grid, notifications::notifications, server_settings::server_settings,
-    targets::targets,
+    actions_panel::actions_panel, chat_inbox::chat_inbox, chat_settings::chat_settings,
+    config_transfer::config_transfer, metrics::metrics_grid, notifications::notifications,
+    server_settings::server_settings, targets::targets, web_auth::web_auth,
 };
 
 pub async fn run_web_server(
@@ -67,6 +70,8 @@ async fn home() -> Result {
 
                 <form id="configForm" method="post" action="/api/config" class="flex flex-col gap-6 relative">
                     server_settings()
+                    web_auth()
+                    chat_settings()
                     notifications()
                     targets()
                     actions_panel()
@@ -118,7 +123,7 @@ fn parse_imported_config(body: &[u8]) -> anyhow::Result<AppConfig> {
         .as_object()
         .context("The JSON configuration must be an object")?;
 
-    for field in ["server", "notifications", "targets"] {
+    for field in ["server", "notifications", "targets", "web_auth", "chat"] {
         if !object.contains_key(field) {
             anyhow::bail!("JSON configuration is missing required field '{field}'");
         }
@@ -148,6 +153,32 @@ struct NotificationsForm {
     clear_webhook_url: bool,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct WebAuthForm {
+    username: Option<String>,
+    password: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatForm {
+    ingest_token: Option<String>,
+    #[serde(default)]
+    clear_ingest_token: bool,
+    queue_capacity: Option<usize>,
+    twitch_eventsub_secret: Option<String>,
+    #[serde(default)]
+    clear_twitch_eventsub_secret: bool,
+    youtube_api_key: Option<String>,
+    #[serde(default)]
+    clear_youtube_api_key: bool,
+    youtube_live_chat_id: Option<String>,
+    youtube_video_id: Option<String>,
+    youtube_channel_id: Option<String>,
+    youtube_min_poll_interval_secs: Option<u64>,
+    #[serde(default)]
+    youtube_adaptive_polling: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct TargetForm {
     name: String,
@@ -162,6 +193,8 @@ struct TargetForm {
 #[derive(Debug, Default, Deserialize)]
 struct ConfigForm {
     pub server: Option<ServerForm>,
+    pub web_auth: Option<WebAuthForm>,
+    pub chat: Option<ChatForm>,
     pub notifications: Option<NotificationsForm>,
     pub targets: Option<Vec<TargetForm>>,
     pub action: Option<String>,
@@ -212,6 +245,43 @@ fn merge_form(current: &AppConfig, form: ConfigForm) -> anyhow::Result<AppConfig
                 notification_fields.clear_webhook_url,
                 config.notifications.webhook_url,
             ),
+        };
+    }
+    if let Some(auth_fields) = form.web_auth {
+        config.web_auth = WebAuthSettings {
+            username: auth_fields
+                .username
+                .unwrap_or(config.web_auth.username)
+                .trim()
+                .to_string(),
+            password: non_empty(auth_fields.password).unwrap_or(config.web_auth.password),
+        };
+    }
+    if let Some(chat) = form.chat {
+        config.chat = ChatSettings {
+            ingest_token: updated_secret(
+                chat.ingest_token,
+                chat.clear_ingest_token,
+                config.chat.ingest_token,
+            ),
+            queue_capacity: chat.queue_capacity.unwrap_or(config.chat.queue_capacity),
+            twitch_eventsub_secret: updated_secret(
+                chat.twitch_eventsub_secret,
+                chat.clear_twitch_eventsub_secret,
+                config.chat.twitch_eventsub_secret,
+            ),
+            youtube_api_key: updated_secret(
+                chat.youtube_api_key,
+                chat.clear_youtube_api_key,
+                config.chat.youtube_api_key,
+            ),
+            youtube_live_chat_id: non_empty(chat.youtube_live_chat_id),
+            youtube_video_id: non_empty(chat.youtube_video_id),
+            youtube_channel_id: non_empty(chat.youtube_channel_id),
+            youtube_min_poll_interval_secs: chat
+                .youtube_min_poll_interval_secs
+                .unwrap_or(config.chat.youtube_min_poll_interval_secs),
+            youtube_adaptive_polling: chat.youtube_adaptive_polling,
         };
     }
     if let Some(target_fields) = form.targets {
@@ -267,7 +337,12 @@ async fn update_config(cx: &Cx, body: topcoat::router::Bytes) -> Result<topcoat:
         }
     };
 
-    if form.server.is_none() && form.notifications.is_none() && form.targets.is_none() {
+    if form.server.is_none()
+        && form.web_auth.is_none()
+        && form.chat.is_none()
+        && form.notifications.is_none()
+        && form.targets.is_none()
+    {
         tracing::error!("Config form contained no recognized configuration fields");
         return Err(topcoat::router::bad_request(
             "No configuration fields were recognized; nothing was saved",
@@ -312,12 +387,22 @@ async fn update_config(cx: &Cx, body: topcoat::router::Bytes) -> Result<topcoat:
         return Err(topcoat::router::bad_request(error.to_string()).into());
     }
 
-    if let Err(e) = state.config_store.save(&updated) {
-        tracing::error!("Failed to save configuration to SQLite: {}", e);
-        return Err(topcoat::router::internal_server_error(e).into());
+    let changed = updated != *config_write;
+    let chat_changed = updated.chat != config_write.chat;
+    if changed {
+        if let Err(e) = state.config_store.save(&updated) {
+            tracing::error!("Failed to save configuration to SQLite: {}", e);
+            return Err(topcoat::router::internal_server_error(e).into());
+        }
+        *config_write = updated;
     }
-
-    *config_write = updated;
+    drop(config_write);
+    if chat_changed {
+        if let Err(error) = state.apply_chat_config().await {
+            tracing::error!("Failed to apply chat configuration: {error:#}");
+            return Err(topcoat::router::internal_server_error(error).into());
+        }
+    }
     topcoat::router::IntoResponse::into_response(redirect, cx)
 }
 
@@ -342,11 +427,19 @@ async fn import_config(cx: &Cx, body: topcoat::router::Bytes) -> Result<topcoat:
 
     let state: &Arc<ProxyState> = app_context(cx);
     let mut config_write = state.config.write().await;
-    if let Err(error) = state.config_store.save(&imported) {
-        tracing::error!("Failed to import configuration into SQLite: {}", error);
-        return Err(topcoat::router::internal_server_error(error).into());
+    let changed = imported != *config_write;
+    let chat_changed = imported.chat != config_write.chat;
+    if changed {
+        if let Err(error) = state.config_store.save(&imported) {
+            tracing::error!("Failed to import configuration into SQLite: {}", error);
+            return Err(topcoat::router::internal_server_error(error).into());
+        }
+        *config_write = imported;
     }
-    *config_write = imported;
+    drop(config_write);
+    if chat_changed {
+        state.apply_chat_config().await?;
+    }
 
     topcoat::router::IntoResponse::into_response(topcoat::router::StatusCode::NO_CONTENT, cx)
 }
@@ -382,11 +475,19 @@ async fn import_config_file(
 
     let state: &Arc<ProxyState> = app_context(cx);
     let mut config_write = state.config.write().await;
-    if let Err(error) = state.config_store.save(&imported) {
-        tracing::error!("Failed to import configuration into SQLite: {}", error);
-        return Err(topcoat::router::internal_server_error(error).into());
+    let changed = imported != *config_write;
+    let chat_changed = imported.chat != config_write.chat;
+    if changed {
+        if let Err(error) = state.config_store.save(&imported) {
+            tracing::error!("Failed to import configuration into SQLite: {}", error);
+            return Err(topcoat::router::internal_server_error(error).into());
+        }
+        *config_write = imported;
     }
-    *config_write = imported;
+    drop(config_write);
+    if chat_changed {
+        state.apply_chat_config().await?;
+    }
 
     redirect_home(cx)
 }
@@ -499,11 +600,19 @@ async fn ingest_chat_message(
     Json(message): Json<IncomingChatMessage>,
 ) -> Result<topcoat::router::Response> {
     let state: &Arc<ProxyState> = app_context(cx);
-    let Some(expected_token) = state.chat_ingest_token.as_deref() else {
+    let expected_token = state
+        .config
+        .read()
+        .await
+        .chat
+        .ingest_token
+        .clone()
+        .filter(|value| !value.trim().is_empty());
+    let Some(expected_token) = expected_token.as_deref() else {
         return topcoat::router::IntoResponse::into_response(
             (
                 topcoat::router::StatusCode::SERVICE_UNAVAILABLE,
-                "Chat ingest is disabled; configure CHAT_INGEST_TOKEN",
+                "Chat ingest is disabled; configure a chat ingest token",
             ),
             cx,
         );
@@ -553,6 +662,16 @@ mod tests {
                 public_url: Some("https://example.test/watch".into()),
                 enabled: true,
             }],
+            web_auth: WebAuthSettings {
+                username: "operator".into(),
+                password: "correct horse battery staple".into(),
+            },
+            chat: ChatSettings {
+                ingest_token: Some("generic-ingest-token".into()),
+                twitch_eventsub_secret: Some("twitch-secret".into()),
+                youtube_api_key: Some("youtube-api-key".into()),
+                ..ChatSettings::default()
+            },
         }
     }
 
@@ -569,6 +688,11 @@ mod tests {
         assert_eq!(updated.notifications.live_message, "Still live");
         assert_eq!(updated.targets.len(), 1);
         assert_eq!(updated.targets[0].stream_key, "secret");
+        assert_eq!(updated.web_auth.password, "correct horse battery staple");
+        assert_eq!(
+            updated.chat.ingest_token.as_deref(),
+            Some("generic-ingest-token")
+        );
     }
 
     #[test]
@@ -646,6 +770,34 @@ mod tests {
     }
 
     #[test]
+    fn blank_web_and_chat_secrets_preserve_existing_credentials() {
+        let form: ConfigForm = serde_qs::Config::new()
+            .use_form_encoding(true)
+            .deserialize_str(
+                "web_auth%5Busername%5D=operator&web_auth%5Bpassword%5D=&\
+                 chat%5Bingest_token%5D=&chat%5Btwitch_eventsub_secret%5D=&\
+                 chat%5Byoutube_api_key%5D=&chat%5Bqueue_capacity%5D=250&action=save",
+            )
+            .unwrap();
+        let updated = merge_form(&populated_config(), form).unwrap();
+
+        assert_eq!(updated.web_auth.password, "correct horse battery staple");
+        assert_eq!(
+            updated.chat.ingest_token.as_deref(),
+            Some("generic-ingest-token")
+        );
+        assert_eq!(
+            updated.chat.twitch_eventsub_secret.as_deref(),
+            Some("twitch-secret")
+        );
+        assert_eq!(
+            updated.chat.youtube_api_key.as_deref(),
+            Some("youtube-api-key")
+        );
+        assert_eq!(updated.chat.queue_capacity, 250);
+    }
+
+    #[test]
     fn query_mode_does_not_decode_browser_form_keys() {
         let form: ConfigForm =
             serde_qs::from_str("server%5Blisten%5D=127.0.0.1%3A1936&action=save").unwrap();
@@ -676,9 +828,17 @@ mod tests {
             .to_string()
             .contains("notifications"));
 
+        let legacy_export = br#"{"server": {}, "notifications": {}, "targets": []}"#;
+        assert!(parse_imported_config(legacy_export)
+            .unwrap_err()
+            .to_string()
+            .contains("web_auth"));
+
         let invalid_target = br#"{
             "server": {},
             "notifications": {},
+            "web_auth": {},
+            "chat": {},
             "targets": [{
                 "name": "Twitch",
                 "url": "https://example.test/app",

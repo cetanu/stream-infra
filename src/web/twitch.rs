@@ -46,11 +46,19 @@ struct TwitchChatMessage {
 #[route(POST "/api/chat/twitch/eventsub")]
 async fn twitch_eventsub(cx: &Cx, body: Bytes) -> Result<topcoat::router::Response> {
     let state: &Arc<ProxyState> = app_context(cx);
-    let Some(secret) = state.twitch_eventsub_secret.as_deref() else {
+    let secret = state
+        .config
+        .read()
+        .await
+        .chat
+        .twitch_eventsub_secret
+        .clone()
+        .filter(|value| !value.trim().is_empty());
+    let Some(secret) = secret.as_deref() else {
         return IntoResponse::into_response(
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Twitch EventSub ingest is disabled; configure TWITCH_EVENTSUB_SECRET",
+                "Twitch EventSub ingest is disabled; configure its webhook secret",
             ),
             cx,
         );

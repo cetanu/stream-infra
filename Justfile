@@ -35,9 +35,20 @@ update-conf:
     pulumi config set rtmpConfig --secret "$(< ../config.toml)"
     popd
 
-# Deploy infrastructure to Vultr via Pulumi (syncs latest config.toml)
-deploy: update-conf
+# Configure the initial HTTP Basic username and prompt securely for its password
+configure-web-auth username:
     #!/usr/bin/env bash
+    set -euo pipefail
     pushd infra
+    pulumi config set webUsername "{{username}}"
+    pulumi config set webPassword --secret
+    popd
+
+# Replace the compute instance, reattach persistent state, and fetch the latest release
+deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pushd infra
+    pulumi config set deployNonce "$(date -u +%Y%m%dT%H%M%SZ)"
     pulumi up
     popd

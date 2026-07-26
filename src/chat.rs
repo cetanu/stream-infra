@@ -231,6 +231,12 @@ impl ChatInbox {
         })
     }
 
+    pub fn resize(&mut self, capacity: usize) -> Result<()> {
+        assert!(capacity > 0, "chat queue capacity must be positive");
+        self.capacity = capacity;
+        self.trim_to_capacity()
+    }
+
     fn trim_to_capacity(&mut self) -> Result<()> {
         let transaction = self.connection.transaction()?;
         let count = message_count(&transaction)?;

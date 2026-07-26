@@ -7,17 +7,11 @@ mod server;
 mod web;
 
 use anyhow::{Context, Result};
-use chat::youtube::{YouTubeChatConfig, YouTubeChatTarget};
 use clap::{Parser, Subcommand};
 use config::ConfigStore;
 use metrics::{run_health_server, Metrics};
-use server::{
-    run_rtmp_server,
-    state::{ChatRuntimeConfig, ProxyState},
-};
+use server::{run_rtmp_server, state::ProxyState};
 use std::fs;
-use std::num::NonZeroU64;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -32,50 +26,13 @@ struct CliArgs {
     #[arg(short, long, env = "CONFIG_PATH", default_value = "config.toml")]
     config: PathBuf,
 
-    /// Bearer token accepted by POST /api/chat/ingest
-    #[arg(long, env = "CHAT_INGEST_TOKEN", hide_env_values = true)]
-    chat_ingest_token: Option<String>,
+    /// Initial web username, persisted only when SQLite has no web credentials
+    #[arg(long, env = "WEB_AUTH_BOOTSTRAP_USERNAME", hide_env_values = true)]
+    web_auth_bootstrap_username: Option<String>,
 
-    /// Maximum number of displayed and waiting chat messages retained in SQLite
-    #[arg(long, env = "CHAT_QUEUE_CAPACITY", default_value = "500")]
-    chat_queue_capacity: NonZeroUsize,
-
-    /// Secret used to verify Twitch EventSub webhook signatures
-    #[arg(long, env = "TWITCH_EVENTSUB_SECRET", hide_env_values = true)]
-    twitch_eventsub_secret: Option<String>,
-
-    /// Google API key used to read YouTube live chat
-    #[arg(long, env = "YOUTUBE_API_KEY", hide_env_values = true)]
-    youtube_api_key: Option<String>,
-
-    /// YouTube liveChatId to ingest
-    #[arg(
-        long,
-        env = "YOUTUBE_LIVE_CHAT_ID",
-        conflicts_with_all = ["youtube_video_id", "youtube_channel_id"]
-    )]
-    youtube_live_chat_id: Option<String>,
-
-    /// YouTube videoId whose active live chat should be discovered
-    #[arg(long, env = "YOUTUBE_VIDEO_ID", conflicts_with = "youtube_channel_id")]
-    youtube_video_id: Option<String>,
-
-    /// YouTube channelId whose active stream and live chat should be discovered
-    #[arg(long, env = "YOUTUBE_CHANNEL_ID")]
-    youtube_channel_id: Option<String>,
-
-    /// Minimum interval between YouTube chat API polls
-    #[arg(long, env = "YOUTUBE_MIN_POLL_INTERVAL_SECS", default_value = "5")]
-    youtube_min_poll_interval_secs: NonZeroU64,
-
-    /// Back off YouTube polling when the chat is idle
-    #[arg(
-        long,
-        env = "YOUTUBE_ADAPTIVE_POLLING",
-        default_value = "true",
-        action = clap::ArgAction::Set
-    )]
-    youtube_adaptive_polling: bool,
+    /// Initial web password, persisted only when SQLite has no web credentials
+    #[arg(long, env = "WEB_AUTH_BOOTSTRAP_PASSWORD", hide_env_values = true)]
+    web_auth_bootstrap_password: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -99,10 +56,15 @@ fn install_systemd(work_dir: &Path, config_path: &Path) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("Failed to determine path of current executable")?;
 
+    let state_dir = config_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(work_dir);
     let unit_content = SYSTEMD_UNIT_TEMPLATE
         .replace("{WORK_DIR}", &work_dir.display().to_string())
         .replace("{EXEC_START}", &current_exe.display().to_string())
-        .replace("{CONFIG_PATH}", &config_path.display().to_string());
+        .replace("{CONFIG_PATH}", &config_path.display().to_string())
+        .replace("{STATE_DIR}", &state_dir.display().to_string());
 
     let unit_path = Path::new("/etc/systemd/system/rtmp-proxy.service");
     fs::write(unit_path, unit_content)
@@ -153,7 +115,29 @@ async fn main() -> Result<()> {
     }
 
     info!(path = ?cli.config, "Loading configuration");
-    let (config_store, config) = ConfigStore::open(&cli.config)?;
+    let (config_store, mut config) = ConfigStore::open(&cli.config)?;
+    if config.web_auth.username.is_empty() && config.web_auth.password.is_empty() {
+        match (
+            cli.web_auth_bootstrap_username
+                .filter(|value| !value.trim().is_empty()),
+            cli.web_auth_bootstrap_password
+                .filter(|value| !value.is_empty()),
+        ) {
+            (Some(username), Some(password)) => {
+                config.web_auth.username = username.trim().to_string();
+                config.web_auth.password = password;
+                config.validate()?;
+                config_store.save(&config)?;
+                info!("Persisted initial web authentication credentials to SQLite");
+            }
+            (None, None) => warn!(
+                "Web authentication is disabled; configure web_auth or provide both bootstrap credentials"
+            ),
+            _ => anyhow::bail!(
+                "Both WEB_AUTH_BOOTSTRAP_USERNAME and WEB_AUTH_BOOTSTRAP_PASSWORD are required together"
+            ),
+        }
+    }
     config.validate()?;
     info!(path = %config_store.path().display(), "Using SQLite configuration database");
 
@@ -183,53 +167,8 @@ async fn main() -> Result<()> {
         http_client,
         listen_port,
         config_store,
-        ChatRuntimeConfig {
-            ingest_token: cli.chat_ingest_token,
-            queue_capacity: cli.chat_queue_capacity.get(),
-            twitch_eventsub_secret: cli.twitch_eventsub_secret,
-        },
     )?);
-
-    let youtube_target = cli
-        .youtube_live_chat_id
-        .filter(|value| !value.trim().is_empty())
-        .map(YouTubeChatTarget::LiveChat)
-        .or_else(|| {
-            cli.youtube_video_id
-                .filter(|value| !value.trim().is_empty())
-                .map(YouTubeChatTarget::Video)
-        })
-        .or_else(|| {
-            cli.youtube_channel_id
-                .filter(|value| !value.trim().is_empty())
-                .map(YouTubeChatTarget::Channel)
-        });
-    match (
-        cli.youtube_api_key
-            .filter(|api_key| !api_key.trim().is_empty()),
-        youtube_target,
-    ) {
-        (Some(api_key), Some(target)) => {
-            let youtube_state = Arc::clone(&state);
-            tokio::spawn(chat::youtube::run(
-                youtube_state,
-                YouTubeChatConfig {
-                    api_key,
-                    target,
-                    min_poll_interval: std::time::Duration::from_secs(
-                        cli.youtube_min_poll_interval_secs.get(),
-                    ),
-                    adaptive_polling: cli.youtube_adaptive_polling,
-                },
-            ));
-            info!("YouTube live chat ingest enabled");
-        }
-        (None, None) => {}
-        _ => warn!(
-            "YouTube chat ingest requires YOUTUBE_API_KEY and one of YOUTUBE_LIVE_CHAT_ID, \
-             YOUTUBE_VIDEO_ID, or YOUTUBE_CHANNEL_ID; adapter disabled"
-        ),
-    }
+    state.apply_chat_config().await?;
 
     // Spawn Web Server
     let web_state = Arc::clone(&state);
