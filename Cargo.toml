@@ -23,6 +23,10 @@ topcoat = { version = "0.4.0", features = ["ui", "tailwind", "asset", "multipart
 serde_qs = "1.1.2"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 base64 = "0.22.1"
+bytes = "1"
+futures-util = "0.3"
+http-body = "1"
+http-body-util = "0.1"
 
 [build-dependencies]
 topcoat = { version = "0.4.0", default-features = false, features = ["tailwind"] }

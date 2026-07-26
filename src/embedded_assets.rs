@@ -7,6 +7,7 @@ const TAILWIND_CSS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tailwind.c
 // Vendored from topcoat-runtime 0.4.0 so the browser runtime is part of the
 // same release artifact as the server executable.
 const TOPCOAT_RUNTIME: &[u8] = include_bytes!("../static/topcoat-runtime.js");
+const CHAT_EVENTS: &[u8] = include_bytes!("../static/chat-events.js");
 
 struct EmbeddedAsset {
     id: Asset,
@@ -38,6 +39,13 @@ pub fn install(executable: &Path, tailwind_stylesheet: Asset) -> Result<()> {
             extension: "js",
             content_type: "text/javascript",
             contents: TOPCOAT_RUNTIME,
+        },
+        EmbeddedAsset {
+            id: crate::web::CHAT_EVENTS_SCRIPT,
+            stem: "chat-events",
+            extension: "js",
+            content_type: "text/javascript",
+            contents: CHAT_EVENTS,
         },
     ];
 
@@ -88,6 +96,7 @@ mod tests {
 
         assert!(bundle.get(crate::web::TAILWIND_STYLESHEET).is_some());
         assert!(bundle.get(topcoat::runtime::SCRIPT).is_some());
+        assert!(bundle.get(crate::web::CHAT_EVENTS_SCRIPT).is_some());
 
         fs::remove_dir_all(test_dir).unwrap();
     }

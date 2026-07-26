@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Child;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tokio::task::JoinHandle;
 
 pub struct ProxyState {
@@ -18,6 +18,7 @@ pub struct ProxyState {
     pub http_client: Client,
     pub active_relays: Mutex<HashMap<String, Vec<Child>>>,
     pub chat_inbox: Mutex<ChatInbox>,
+    chat_revision: watch::Sender<u64>,
     pub youtube_status: RwLock<Option<YouTubeIngestStatus>>,
     twitch_task: Mutex<Option<JoinHandle<()>>>,
     youtube_task: Mutex<Option<JoinHandle<()>>>,
@@ -40,12 +41,22 @@ impl ProxyState {
             http_client,
             active_relays: Mutex::new(HashMap::new()),
             chat_inbox: Mutex::new(chat_inbox),
+            chat_revision: watch::channel(0).0,
             youtube_status: RwLock::new(None),
             twitch_task: Mutex::new(None),
             youtube_task: Mutex::new(None),
             listen_port,
             config_store,
         })
+    }
+
+    pub fn notify_chat_changed(&self) {
+        self.chat_revision
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    pub fn subscribe_chat_changes(&self) -> watch::Receiver<u64> {
+        self.chat_revision.subscribe()
     }
 
     pub async fn apply_chat_config(self: &Arc<Self>) -> anyhow::Result<()> {

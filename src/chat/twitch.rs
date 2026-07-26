@@ -81,7 +81,10 @@ async fn read_connection(state: &Arc<ProxyState>, channel: &str) -> Result<()> {
             sent_at: None,
         };
         match state.chat_inbox.lock().await.enqueue(message) {
-            Ok(EnqueueOutcome::Accepted | EnqueueOutcome::Duplicate | EnqueueOutcome::Dropped) => {}
+            Ok(EnqueueOutcome::Accepted | EnqueueOutcome::Dropped) => {
+                state.notify_chat_changed();
+            }
+            Ok(EnqueueOutcome::Duplicate) => {}
             Err(error) => tracing::warn!("Discarding invalid Twitch IRC message: {error}"),
         }
     }

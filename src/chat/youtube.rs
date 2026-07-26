@@ -188,6 +188,9 @@ pub async fn run(state: Arc<ProxyState>, config: YouTubeChatConfig) {
                         }
                     }
                 }
+                if accepted > 0 {
+                    state.notify_chat_changed();
+                }
 
                 idle_polls = if accepted == 0 {
                     idle_polls.saturating_add(1)

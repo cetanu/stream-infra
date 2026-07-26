@@ -14,7 +14,9 @@ async fn acknowledge_chat(cx: &Cx, displayed_id: String) -> Result<String> {
     let state: &Arc<ProxyState> = app_context(cx);
     let mut inbox = state.chat_inbox.lock().await;
     if let Ok(displayed_id) = displayed_id.parse() {
-        inbox.acknowledge(displayed_id)?;
+        if inbox.acknowledge(displayed_id)? {
+            state.notify_chat_changed();
+        }
     }
     Ok(current_message_id(&inbox.snapshot()?))
 }
@@ -109,6 +111,7 @@ pub async fn chat_inbox(cx: &Cx) -> Result {
             card_footer(
                 attrs: attributes! { class="justify-end" },
                 <button
+                    id="chat-refresh-button"
                     type="button"
                     class=(outline_button)
                     @click=$(async |_event| {

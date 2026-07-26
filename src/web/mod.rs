@@ -4,7 +4,12 @@ use crate::config::{
 };
 use crate::server::state::ProxyState;
 use anyhow::Context;
+use bytes::Bytes;
+use futures_util::stream;
+use http_body::Frame;
+use http_body_util::StreamBody;
 use serde::Deserialize;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -25,6 +30,8 @@ use components::{
 };
 
 pub(crate) const TAILWIND_STYLESHEET: topcoat::asset::Asset = topcoat::tailwind::stylesheet!();
+pub(crate) const CHAT_EVENTS_SCRIPT: topcoat::asset::Asset =
+    topcoat::asset::asset!("static/chat-events.js");
 
 pub async fn run_web_server(
     state: Arc<ProxyState>,
@@ -58,6 +65,7 @@ async fn home() -> Result {
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
             <link rel="stylesheet" href=(TAILWIND_STYLESHEET) />
             topcoat::runtime::script()
+            <script src=(CHAT_EVENTS_SCRIPT) defer="defer"></script>
         </head>
         <body class="min-h-screen bg-background text-foreground font-sans antialiased relative">
             <header class="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur py-8 text-center">
@@ -586,8 +594,47 @@ async fn acknowledge_chat_message(
             cx,
         );
     }
+    state.notify_chat_changed();
 
     topcoat::router::IntoResponse::into_response(Json(inbox.snapshot()?), cx)
+}
+
+#[route(GET "/api/chat/events")]
+async fn chat_events(cx: &Cx) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    let receiver = state.subscribe_chat_changes();
+    let events = stream::unfold((receiver, true), |(mut receiver, initial)| async move {
+        let payload = if initial {
+            format!("event: chat\ndata: {}\n\n", *receiver.borrow())
+        } else {
+            tokio::select! {
+                changed = receiver.changed() => {
+                    if changed.is_err() {
+                        return None;
+                    }
+                    format!("event: chat\ndata: {}\n\n", *receiver.borrow_and_update())
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
+                    ": keep-alive\n\n".to_string()
+                }
+            }
+        };
+        Some((
+            Ok::<_, Infallible>(Frame::data(Bytes::from(payload))),
+            (receiver, false),
+        ))
+    });
+    let mut response =
+        topcoat::router::Response::new(topcoat::router::Body::new(StreamBody::new(events)));
+    response.headers_mut().insert(
+        topcoat::router::header::CONTENT_TYPE,
+        topcoat::router::HeaderValue::from_static("text/event-stream"),
+    );
+    response.headers_mut().insert(
+        topcoat::router::header::CACHE_CONTROL,
+        topcoat::router::HeaderValue::from_static("no-cache, no-transform"),
+    );
+    Ok(response)
 }
 
 #[route(POST "/api/chat/ingest")]
@@ -624,6 +671,9 @@ async fn ingest_chat_message(
         Ok(EnqueueOutcome::Dropped) => "dropped",
         Err(error) => return Err(topcoat::router::bad_request(error.to_string()).into()),
     };
+    if outcome != "duplicate" {
+        state.notify_chat_changed();
+    }
     let response = ChatIngestResponse {
         outcome,
         inbox: inbox.snapshot()?,
