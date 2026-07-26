@@ -7,7 +7,7 @@ mod server;
 mod web;
 
 use anyhow::{Context, Result};
-use chat::youtube::YouTubeChatConfig;
+use chat::youtube::{YouTubeChatConfig, YouTubeChatTarget};
 use clap::{Parser, Subcommand};
 use config::ConfigStore;
 use metrics::{run_health_server, Metrics};
@@ -16,6 +16,7 @@ use server::{
     state::{ChatRuntimeConfig, ProxyState},
 };
 use std::fs;
+use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,7 +36,7 @@ struct CliArgs {
     #[arg(long, env = "CHAT_INGEST_TOKEN", hide_env_values = true)]
     chat_ingest_token: Option<String>,
 
-    /// Maximum number of displayed and waiting chat messages held in memory
+    /// Maximum number of displayed and waiting chat messages retained in SQLite
     #[arg(long, env = "CHAT_QUEUE_CAPACITY", default_value = "500")]
     chat_queue_capacity: NonZeroUsize,
 
@@ -48,8 +49,33 @@ struct CliArgs {
     youtube_api_key: Option<String>,
 
     /// YouTube liveChatId to ingest
-    #[arg(long, env = "YOUTUBE_LIVE_CHAT_ID")]
+    #[arg(
+        long,
+        env = "YOUTUBE_LIVE_CHAT_ID",
+        conflicts_with_all = ["youtube_video_id", "youtube_channel_id"]
+    )]
     youtube_live_chat_id: Option<String>,
+
+    /// YouTube videoId whose active live chat should be discovered
+    #[arg(long, env = "YOUTUBE_VIDEO_ID", conflicts_with = "youtube_channel_id")]
+    youtube_video_id: Option<String>,
+
+    /// YouTube channelId whose active stream and live chat should be discovered
+    #[arg(long, env = "YOUTUBE_CHANNEL_ID")]
+    youtube_channel_id: Option<String>,
+
+    /// Minimum interval between YouTube chat API polls
+    #[arg(long, env = "YOUTUBE_MIN_POLL_INTERVAL_SECS", default_value = "5")]
+    youtube_min_poll_interval_secs: NonZeroU64,
+
+    /// Back off YouTube polling when the chat is idle
+    #[arg(
+        long,
+        env = "YOUTUBE_ADAPTIVE_POLLING",
+        default_value = "true",
+        action = clap::ArgAction::Set
+    )]
+    youtube_adaptive_polling: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -162,25 +188,46 @@ async fn main() -> Result<()> {
             queue_capacity: cli.chat_queue_capacity.get(),
             twitch_eventsub_secret: cli.twitch_eventsub_secret,
         },
-    ));
+    )?);
 
-    match (cli.youtube_api_key, cli.youtube_live_chat_id) {
-        (Some(api_key), Some(live_chat_id))
-            if !api_key.trim().is_empty() && !live_chat_id.trim().is_empty() =>
-        {
+    let youtube_target = cli
+        .youtube_live_chat_id
+        .filter(|value| !value.trim().is_empty())
+        .map(YouTubeChatTarget::LiveChat)
+        .or_else(|| {
+            cli.youtube_video_id
+                .filter(|value| !value.trim().is_empty())
+                .map(YouTubeChatTarget::Video)
+        })
+        .or_else(|| {
+            cli.youtube_channel_id
+                .filter(|value| !value.trim().is_empty())
+                .map(YouTubeChatTarget::Channel)
+        });
+    match (
+        cli.youtube_api_key
+            .filter(|api_key| !api_key.trim().is_empty()),
+        youtube_target,
+    ) {
+        (Some(api_key), Some(target)) => {
             let youtube_state = Arc::clone(&state);
             tokio::spawn(chat::youtube::run(
                 youtube_state,
                 YouTubeChatConfig {
                     api_key,
-                    live_chat_id,
+                    target,
+                    min_poll_interval: std::time::Duration::from_secs(
+                        cli.youtube_min_poll_interval_secs.get(),
+                    ),
+                    adaptive_polling: cli.youtube_adaptive_polling,
                 },
             ));
             info!("YouTube live chat ingest enabled");
         }
         (None, None) => {}
         _ => warn!(
-            "YouTube chat ingest requires both YOUTUBE_API_KEY and YOUTUBE_LIVE_CHAT_ID; adapter disabled"
+            "YouTube chat ingest requires YOUTUBE_API_KEY and one of YOUTUBE_LIVE_CHAT_ID, \
+             YOUTUBE_VIDEO_ID, or YOUTUBE_CHANNEL_ID; adapter disabled"
         ),
     }
 

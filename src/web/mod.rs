@@ -463,10 +463,11 @@ fn redirect_home(cx: &Cx) -> Result<topcoat::router::Response> {
 #[route(GET "/api/chat")]
 async fn get_chat_inbox(cx: &Cx) -> Result<topcoat::router::Response> {
     let state: &Arc<ProxyState> = app_context(cx);
+    let snapshot = state.chat_inbox.lock().await.snapshot()?;
     topcoat::router::IntoResponse::into_response(
         (
             [(topcoat::router::header::CACHE_CONTROL, "no-store")],
-            Json(state.chat_inbox.lock().await.snapshot()),
+            Json(snapshot),
         ),
         cx,
     )
@@ -479,7 +480,7 @@ async fn acknowledge_chat_message(
 ) -> Result<topcoat::router::Response> {
     let state: &Arc<ProxyState> = app_context(cx);
     let mut inbox = state.chat_inbox.lock().await;
-    if !inbox.acknowledge(request.id) {
+    if !inbox.acknowledge(request.id)? {
         return topcoat::router::IntoResponse::into_response(
             (
                 topcoat::router::StatusCode::CONFLICT,
@@ -489,7 +490,7 @@ async fn acknowledge_chat_message(
         );
     }
 
-    topcoat::router::IntoResponse::into_response(Json(inbox.snapshot()), cx)
+    topcoat::router::IntoResponse::into_response(Json(inbox.snapshot()?), cx)
 }
 
 #[route(POST "/api/chat/ingest")]
@@ -520,7 +521,7 @@ async fn ingest_chat_message(
     };
     let response = ChatIngestResponse {
         outcome,
-        inbox: inbox.snapshot(),
+        inbox: inbox.snapshot()?,
     };
 
     topcoat::router::IntoResponse::into_response(

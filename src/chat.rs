@@ -1,11 +1,10 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod youtube;
-
-pub const DEFAULT_CHAT_QUEUE_CAPACITY: usize = 500;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IncomingChatMessage {
@@ -96,104 +95,220 @@ pub enum EnqueueOutcome {
 #[derive(Debug)]
 pub struct ChatInbox {
     capacity: usize,
-    next_id: u64,
-    messages: VecDeque<ChatMessage>,
-    seen: HashSet<String>,
-    seen_order: VecDeque<String>,
-    dropped: u64,
+    connection: Connection,
 }
 
 impl ChatInbox {
-    pub fn new(capacity: usize) -> Self {
+    pub fn open(path: &Path, capacity: usize) -> Result<Self> {
+        let connection = Connection::open(path)
+            .with_context(|| format!("Failed to open chat inbox database '{}'", path.display()))?;
+        Self::from_connection(connection, capacity)
+    }
+
+    fn from_connection(connection: Connection, capacity: usize) -> Result<Self> {
         assert!(capacity > 0, "chat queue capacity must be positive");
-        Self {
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch(
+            "
+            PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                text TEXT NOT NULL,
+                avatar_url TEXT,
+                sent_at TEXT,
+                received_at_unix_ms INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chat_seen (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                UNIQUE(source, external_id)
+            );
+            CREATE TABLE IF NOT EXISTS chat_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                dropped INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO chat_state (id, dropped) VALUES (1, 0);
+            ",
+        )?;
+
+        let mut inbox = Self {
             capacity,
-            next_id: 1,
-            messages: VecDeque::with_capacity(capacity),
-            seen: HashSet::with_capacity(capacity * 2),
-            seen_order: VecDeque::with_capacity(capacity * 2),
-            dropped: 0,
-        }
+            connection,
+        };
+        inbox.trim_to_capacity()?;
+        Ok(inbox)
     }
 
     pub fn enqueue(&mut self, incoming: IncomingChatMessage) -> Result<EnqueueOutcome> {
         let incoming = incoming.normalized()?;
-        let deduplication_key = format!("{}:{}", incoming.source, incoming.external_id);
-        if self.seen.contains(&deduplication_key) {
+        let transaction = self.connection.transaction()?;
+
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO chat_seen (source, external_id) VALUES (?1, ?2)",
+            params![incoming.source, incoming.external_id],
+        )?;
+        if inserted == 0 {
             return Ok(EnqueueOutcome::Duplicate);
         }
+        trim_seen(&transaction, self.capacity.saturating_mul(4))?;
 
-        self.remember(deduplication_key);
-
-        if self.messages.len() == self.capacity {
-            self.dropped += 1;
+        let message_count = message_count(&transaction)?;
+        if message_count >= self.capacity {
+            increment_dropped(&transaction, 1)?;
             if self.capacity == 1 {
+                transaction.commit()?;
                 return Ok(EnqueueOutcome::Dropped);
             }
-            self.messages.remove(1);
+            transaction.execute(
+                "DELETE FROM chat_messages
+                 WHERE id = (
+                    SELECT id FROM chat_messages ORDER BY id LIMIT 1 OFFSET 1
+                 )",
+                [],
+            )?;
         }
 
-        let message = ChatMessage {
-            id: self.next_id,
-            source: incoming.source,
-            external_id: incoming.external_id,
-            author: incoming.author,
-            text: incoming.text,
-            avatar_url: incoming.avatar_url,
-            sent_at: incoming.sent_at,
-            received_at_unix_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-        };
-        self.next_id = self.next_id.saturating_add(1);
-        self.messages.push_back(message);
+        transaction.execute(
+            "INSERT INTO chat_messages (
+                source, external_id, author, text, avatar_url, sent_at,
+                received_at_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                incoming.source,
+                incoming.external_id,
+                incoming.author,
+                incoming.text,
+                incoming.avatar_url,
+                incoming.sent_at,
+                now_unix_ms() as i64,
+            ],
+        )?;
+        transaction.commit()?;
         Ok(EnqueueOutcome::Accepted)
     }
 
-    pub fn acknowledge(&mut self, expected_id: u64) -> bool {
-        if self
-            .messages
-            .front()
-            .is_some_and(|message| message.id == expected_id)
-        {
-            self.messages.pop_front();
-            true
-        } else {
-            false
-        }
+    pub fn acknowledge(&mut self, expected_id: u64) -> Result<bool> {
+        let affected = self.connection.execute(
+            "DELETE FROM chat_messages
+             WHERE id = ?1
+               AND id = (SELECT MIN(id) FROM chat_messages)",
+            [expected_id as i64],
+        )?;
+        Ok(affected == 1)
     }
 
-    pub fn snapshot(&self) -> ChatInboxSnapshot {
-        ChatInboxSnapshot {
-            current: self.messages.front().cloned(),
-            waiting: self.messages.len().saturating_sub(1),
-            dropped: self.dropped,
-        }
+    pub fn snapshot(&self) -> Result<ChatInboxSnapshot> {
+        let current = self
+            .connection
+            .query_row(
+                "SELECT id, source, external_id, author, text, avatar_url, sent_at,
+                        received_at_unix_ms
+                 FROM chat_messages
+                 ORDER BY id
+                 LIMIT 1",
+                [],
+                chat_message_from_row,
+            )
+            .optional()?;
+        let count: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM chat_messages", [], |row| row.get(0))?;
+        let dropped: i64 = self.connection.query_row(
+            "SELECT dropped FROM chat_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(ChatInboxSnapshot {
+            current,
+            waiting: (count as usize).saturating_sub(1),
+            dropped: dropped as u64,
+        })
     }
 
-    fn remember(&mut self, key: String) {
-        let seen_capacity = self.capacity.saturating_mul(4);
-        self.seen.insert(key.clone());
-        self.seen_order.push_back(key);
-
-        while self.seen_order.len() > seen_capacity {
-            if let Some(expired) = self.seen_order.pop_front() {
-                self.seen.remove(&expired);
-            }
+    fn trim_to_capacity(&mut self) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        let count = message_count(&transaction)?;
+        let excess = count.saturating_sub(self.capacity);
+        for _ in 0..excess {
+            transaction.execute(
+                "DELETE FROM chat_messages
+                 WHERE id = (
+                    SELECT id FROM chat_messages ORDER BY id LIMIT 1 OFFSET ?1
+                 )",
+                [1_i64],
+            )?;
         }
+        if excess > 0 {
+            increment_dropped(&transaction, excess)?;
+        }
+        trim_seen(&transaction, self.capacity.saturating_mul(4))?;
+        transaction.commit()?;
+        Ok(())
     }
 }
 
-impl Default for ChatInbox {
-    fn default() -> Self {
-        Self::new(DEFAULT_CHAT_QUEUE_CAPACITY)
-    }
+fn chat_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
+    Ok(ChatMessage {
+        id: row.get::<_, i64>(0)? as u64,
+        source: row.get(1)?,
+        external_id: row.get(2)?,
+        author: row.get(3)?,
+        text: row.get(4)?,
+        avatar_url: row.get(5)?,
+        sent_at: row.get(6)?,
+        received_at_unix_ms: row.get::<_, i64>(7)? as u64,
+    })
+}
+
+fn message_count(transaction: &Transaction<'_>) -> rusqlite::Result<usize> {
+    let count: i64 =
+        transaction.query_row("SELECT COUNT(*) FROM chat_messages", [], |row| row.get(0))?;
+    Ok(count as usize)
+}
+
+fn increment_dropped(transaction: &Transaction<'_>, amount: usize) -> rusqlite::Result<()> {
+    transaction.execute(
+        "UPDATE chat_state SET dropped = dropped + ?1 WHERE id = 1",
+        [amount as i64],
+    )?;
+    Ok(())
+}
+
+fn trim_seen(transaction: &Transaction<'_>, capacity: usize) -> rusqlite::Result<()> {
+    transaction.execute(
+        "DELETE FROM chat_seen
+         WHERE id IN (
+            SELECT id FROM chat_seen ORDER BY id
+            LIMIT MAX(0, (SELECT COUNT(*) FROM chat_seen) - ?1)
+         )",
+        [capacity as i64],
+    )?;
+    Ok(())
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DATABASE_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn inbox(capacity: usize) -> ChatInbox {
+        ChatInbox::from_connection(Connection::open_in_memory().unwrap(), capacity).unwrap()
+    }
 
     fn message(source: &str, external_id: &str, text: &str) -> IncomingChatMessage {
         IncomingChatMessage {
@@ -206,51 +321,60 @@ mod tests {
         }
     }
 
+    fn database_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "rtmp-proxy-chat-test-{}-{}.sqlite3",
+            std::process::id(),
+            TEST_DATABASE_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
     #[test]
     fn acknowledge_advances_one_message_at_a_time() {
-        let mut inbox = ChatInbox::new(3);
+        let mut inbox = inbox(3);
         inbox.enqueue(message("twitch", "1", "first")).unwrap();
         inbox.enqueue(message("youtube", "2", "second")).unwrap();
 
-        let first = inbox.snapshot();
+        let first = inbox.snapshot().unwrap();
         assert_eq!(first.current.unwrap().text, "first");
         assert_eq!(first.waiting, 1);
-        assert!(inbox.acknowledge(1));
+        assert!(inbox.acknowledge(1).unwrap());
 
-        let second = inbox.snapshot();
+        let second = inbox.snapshot().unwrap();
         assert_eq!(second.current.unwrap().text, "second");
         assert_eq!(second.waiting, 0);
     }
 
     #[test]
     fn stale_acknowledgement_cannot_clear_a_newer_message() {
-        let mut inbox = ChatInbox::new(3);
+        let mut inbox = inbox(3);
         inbox.enqueue(message("twitch", "1", "first")).unwrap();
         inbox.enqueue(message("twitch", "2", "second")).unwrap();
-        assert!(inbox.acknowledge(1));
-        assert!(!inbox.acknowledge(1));
-        assert_eq!(inbox.snapshot().current.unwrap().text, "second");
+        assert!(inbox.acknowledge(1).unwrap());
+        assert!(!inbox.acknowledge(1).unwrap());
+        assert_eq!(inbox.snapshot().unwrap().current.unwrap().text, "second");
     }
 
     #[test]
-    fn duplicate_platform_message_is_ignored() {
-        let mut inbox = ChatInbox::new(3);
+    fn duplicate_platform_message_is_ignored_after_acknowledgement() {
+        let mut inbox = inbox(3);
         assert_eq!(
             inbox.enqueue(message("twitch", "same", "first")).unwrap(),
             EnqueueOutcome::Accepted
         );
+        assert!(inbox.acknowledge(1).unwrap());
         assert_eq!(
             inbox
                 .enqueue(message("twitch", "same", "duplicate"))
                 .unwrap(),
             EnqueueOutcome::Duplicate
         );
-        assert_eq!(inbox.snapshot().waiting, 0);
+        assert!(inbox.snapshot().unwrap().current.is_none());
     }
 
     #[test]
     fn full_queue_keeps_current_and_most_recent_waiting_messages() {
-        let mut inbox = ChatInbox::new(3);
+        let mut inbox = inbox(3);
         inbox.enqueue(message("twitch", "1", "current")).unwrap();
         inbox
             .enqueue(message("twitch", "2", "old waiting"))
@@ -260,10 +384,54 @@ mod tests {
             .unwrap();
         inbox.enqueue(message("x", "4", "newest waiting")).unwrap();
 
-        assert_eq!(inbox.snapshot().current.unwrap().text, "current");
-        assert_eq!(inbox.snapshot().waiting, 2);
-        assert_eq!(inbox.snapshot().dropped, 1);
-        assert!(inbox.acknowledge(1));
-        assert_eq!(inbox.snapshot().current.unwrap().text, "newer waiting");
+        assert_eq!(inbox.snapshot().unwrap().current.unwrap().text, "current");
+        assert_eq!(inbox.snapshot().unwrap().waiting, 2);
+        assert_eq!(inbox.snapshot().unwrap().dropped, 1);
+        assert!(inbox.acknowledge(1).unwrap());
+        assert_eq!(
+            inbox.snapshot().unwrap().current.unwrap().text,
+            "newer waiting"
+        );
+    }
+
+    #[test]
+    fn sqlite_queue_survives_reopening() {
+        let path = database_path();
+        {
+            let mut inbox = ChatInbox::open(&path, 3).unwrap();
+            inbox
+                .enqueue(message("youtube", "persisted", "still here"))
+                .unwrap();
+        }
+        {
+            let inbox = ChatInbox::open(&path, 3).unwrap();
+            assert_eq!(
+                inbox.snapshot().unwrap().current.unwrap().text,
+                "still here"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reducing_capacity_preserves_current_and_newest_waiting_messages() {
+        let path = database_path();
+        {
+            let mut inbox = ChatInbox::open(&path, 4).unwrap();
+            inbox.enqueue(message("twitch", "1", "current")).unwrap();
+            inbox.enqueue(message("twitch", "2", "oldest")).unwrap();
+            inbox.enqueue(message("twitch", "3", "newer")).unwrap();
+            inbox.enqueue(message("twitch", "4", "newest")).unwrap();
+        }
+        {
+            let mut inbox = ChatInbox::open(&path, 2).unwrap();
+            let snapshot = inbox.snapshot().unwrap();
+            assert_eq!(snapshot.current.unwrap().text, "current");
+            assert_eq!(snapshot.waiting, 1);
+            assert_eq!(snapshot.dropped, 2);
+            assert!(inbox.acknowledge(1).unwrap());
+            assert_eq!(inbox.snapshot().unwrap().current.unwrap().text, "newest");
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

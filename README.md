@@ -9,11 +9,18 @@ from different platforms enter the same FIFO queue. The currently displayed
 message remains visible until it is acknowledged, then the next waiting message
 is shown.
 
-The inbox holds up to 500 messages in memory by default. Set
-`CHAT_QUEUE_CAPACITY` to a positive integer to change the bound. If it fills,
-the current message is preserved and the oldest waiting message is discarded.
-Platform retries are deduplicated by the combination of `source` and
-`external_id`.
+The inbox holds up to 500 messages by default. Messages, acknowledgement
+position, deduplication keys, and the dropped-message count are committed to the
+same SQLite database as the application configuration, so pending chat survives
+service and host restarts. Set `CHAT_QUEUE_CAPACITY` to a positive integer to
+change the bound. If it fills, the current message is preserved and the oldest
+waiting message is discarded. Platform retries are deduplicated by the
+combination of `source` and `external_id`.
+
+The dashboard uses Topcoat procedures and shards for acknowledgement and
+refreshing; it contains no handwritten JavaScript. Topcoat 0.4 does not expose a
+timer or server-push primitive, so use **Check for messages** to refresh chat
+that arrives while the page is already open.
 
 ### Sending messages to the inbox
 
@@ -76,17 +83,34 @@ authorization when the EventSub subscription is created.
 
 ### YouTube Live
 
-Configure both values to start the built-in YouTube polling collector:
+Configure an API key and exactly one chat selector to start the built-in
+YouTube polling collector:
 
 ```text
 YOUTUBE_API_KEY=replace-with-a-google-api-key
+
+# Use one of:
 YOUTUBE_LIVE_CHAT_ID=replace-with-the-active-live-chat-id
+YOUTUBE_VIDEO_ID=replace-with-the-live-video-id
+YOUTUBE_CHANNEL_ID=replace-with-the-channel-id
+
+# Optional:
+YOUTUBE_MIN_POLL_INTERVAL_SECS=5
+YOUTUBE_ADAPTIVE_POLLING=true
 ```
 
-The collector follows YouTube's `nextPageToken` and
-`pollingIntervalMillis`, includes displayable chat and paid-message events, and
-reconnects with bounded exponential backoff. The active `liveChatId` is exposed
-by the broadcast's `snippet.liveChatId` field. See the official
+For a video ID, the collector resolves its active live chat. For a channel ID,
+it first discovers the active broadcast and then resolves that broadcast's
+chat. It keeps retrying while a configured video or channel is not live yet.
+Channel discovery is limited to once every 30 minutes because YouTube's
+`search.list` operation consumes substantial API quota; use a video ID when
+faster discovery is important.
+
+The collector follows YouTube's `nextPageToken` and `pollingIntervalMillis`,
+backs off further while chat is idle, includes displayable chat and paid-message
+events, and reconnects with bounded exponential backoff. Its connection state,
+latest detail, and accepted-message count appear in the chat inbox. See the
+official
 [`liveChatMessages.list`](https://developers.google.com/youtube/v3/live/docs/liveChatMessages/list)
 documentation.
 

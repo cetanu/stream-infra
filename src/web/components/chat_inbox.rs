@@ -14,16 +14,16 @@ async fn acknowledge_chat(cx: &Cx, displayed_id: String) -> Result<String> {
     let state: &Arc<ProxyState> = app_context(cx);
     let mut inbox = state.chat_inbox.lock().await;
     if let Ok(displayed_id) = displayed_id.parse() {
-        inbox.acknowledge(displayed_id);
+        inbox.acknowledge(displayed_id)?;
     }
-    Ok(current_message_id(&inbox.snapshot()))
+    Ok(current_message_id(&inbox.snapshot()?))
 }
 
 #[procedure]
 async fn refresh_chat(cx: &Cx) -> Result<String> {
     let state: &Arc<ProxyState> = app_context(cx);
     Ok(current_message_id(
-        &state.chat_inbox.lock().await.snapshot(),
+        &state.chat_inbox.lock().await.snapshot()?,
     ))
 }
 
@@ -39,7 +39,8 @@ fn current_message_id(snapshot: &crate::chat::ChatInboxSnapshot) -> String {
 async fn chat_inbox_content(cx: &Cx, revision: f64) -> Result {
     let _ = revision;
     let state: &Arc<ProxyState> = app_context(cx);
-    let snapshot = state.chat_inbox.lock().await.snapshot();
+    let snapshot = state.chat_inbox.lock().await.snapshot()?;
+    let youtube_status = state.youtube_status.read().await.clone();
 
     view! {
         card_content(
@@ -47,6 +48,18 @@ async fn chat_inbox_content(cx: &Cx, revision: f64) -> Result {
                 <div class="text-sm font-medium">(format!("{} waiting", snapshot.waiting))</div>
                 <div class="text-sm text-muted-foreground">(format!("{} dropped", snapshot.dropped))</div>
             </div>
+            if let Some(status) = youtube_status {
+                <div class="mb-4 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-semibold">"YouTube ingest"</span>
+                        <span class="uppercase tracking-wide text-muted-foreground">(status.state)</span>
+                    </div>
+                    <p class="mt-1 text-muted-foreground">(status.detail)</p>
+                    <p class="mt-1 text-xs text-muted-foreground">
+                        (format!("{} messages received", status.messages_received))
+                    </p>
+                </div>
+            }
             if let Some(current) = snapshot.current {
                 <div class="flex flex-col gap-4 rounded-xl border bg-surface p-5">
                     <div class="flex items-center justify-between gap-4">
@@ -76,7 +89,7 @@ async fn chat_inbox_content(cx: &Cx, revision: f64) -> Result {
 #[component]
 pub async fn chat_inbox(cx: &Cx) -> Result {
     let state: &Arc<ProxyState> = app_context(cx);
-    let initial_id = current_message_id(&state.chat_inbox.lock().await.snapshot());
+    let initial_id = current_message_id(&state.chat_inbox.lock().await.snapshot()?);
     let outline_button = button_variants(ButtonVariant::Outline, ButtonSize::Md);
     let primary_button = button_variants(ButtonVariant::Primary, ButtonSize::Md);
 
