@@ -1,3 +1,4 @@
+use crate::chat::{ChatInboxSnapshot, EnqueueOutcome, IncomingChatMessage};
 use crate::config::{AppConfig, NotificationSettings, ServerSettings, TargetConfig};
 use crate::server::state::ProxyState;
 use anyhow::Context;
@@ -14,9 +15,11 @@ use topcoat::{
 };
 
 pub mod components;
+pub mod twitch;
 use components::{
-    actions_panel::actions_panel, metrics::metrics_grid, notifications::notifications,
-    server_settings::server_settings, targets::targets,
+    actions_panel::actions_panel, chat_inbox::chat_inbox, config_transfer::config_transfer,
+    metrics::metrics_grid, notifications::notifications, server_settings::server_settings,
+    targets::targets,
 };
 
 pub async fn run_web_server(
@@ -50,6 +53,7 @@ async fn home() -> Result {
             <meta name="description" content="Configuration dashboard for the RTMP Stream Multiplexer." />
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
             <link rel="stylesheet" href=(topcoat::tailwind::stylesheet!()) />
+            topcoat::runtime::script()
         </head>
         <body class="min-h-screen bg-background text-foreground font-sans antialiased relative">
             <header class="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur py-8 text-center">
@@ -59,6 +63,7 @@ async fn home() -> Result {
 
             <div class="container mx-auto max-w-4xl px-4 py-8">
                 metrics_grid()
+                chat_inbox()
 
                 <form id="configForm" method="post" action="/api/config" class="flex flex-col gap-6 relative">
                     server_settings()
@@ -66,11 +71,63 @@ async fn home() -> Result {
                     targets()
                     actions_panel()
                 </form>
+                config_transfer()
             </div>
-
         </body>
         </html>
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct AcknowledgeChatMessage {
+    id: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ChatIngestResponse {
+    outcome: &'static str,
+    inbox: ChatInboxSnapshot,
+}
+
+fn bearer_token(cx: &Cx) -> Option<&str> {
+    topcoat::router::headers(cx)
+        .get(topcoat::router::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+fn token_matches(expected: &str, submitted: &str) -> bool {
+    if expected.len() != submitted.len() {
+        return false;
+    }
+
+    expected
+        .bytes()
+        .zip(submitted.bytes())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+fn parse_imported_config(body: &[u8]) -> anyhow::Result<AppConfig> {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).context("Invalid JSON configuration")?;
+    let object = value
+        .as_object()
+        .context("The JSON configuration must be an object")?;
+
+    for field in ["server", "notifications", "targets"] {
+        if !object.contains_key(field) {
+            anyhow::bail!("JSON configuration is missing required field '{field}'");
+        }
+    }
+
+    let config: AppConfig =
+        serde_json::from_value(value).context("Invalid configuration structure")?;
+    config.validate()?;
+    Ok(config)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -264,6 +321,76 @@ async fn update_config(cx: &Cx, body: topcoat::router::Bytes) -> Result<topcoat:
     topcoat::router::IntoResponse::into_response(redirect, cx)
 }
 
+#[route(GET "/api/config")]
+async fn get_config(cx: &Cx) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    topcoat::router::IntoResponse::into_response(
+        (
+            [(topcoat::router::header::CACHE_CONTROL, "no-store, private")],
+            Json(state.config.read().await.clone()),
+        ),
+        cx,
+    )
+}
+
+#[route(POST "/api/config/import")]
+async fn import_config(cx: &Cx, body: topcoat::router::Bytes) -> Result<topcoat::router::Response> {
+    let imported = match parse_imported_config(&body) {
+        Ok(config) => config,
+        Err(error) => return Err(topcoat::router::bad_request(error.to_string()).into()),
+    };
+
+    let state: &Arc<ProxyState> = app_context(cx);
+    let mut config_write = state.config.write().await;
+    if let Err(error) = state.config_store.save(&imported) {
+        tracing::error!("Failed to import configuration into SQLite: {}", error);
+        return Err(topcoat::router::internal_server_error(error).into());
+    }
+    *config_write = imported;
+
+    topcoat::router::IntoResponse::into_response(topcoat::router::StatusCode::NO_CONTENT, cx)
+}
+
+#[route(POST "/api/config/import-file")]
+async fn import_config_file(
+    cx: &Cx,
+    mut multipart: topcoat::router::Multipart,
+) -> Result<topcoat::router::Response> {
+    const MAX_CONFIG_SIZE: usize = 1024 * 1024;
+
+    let mut config_bytes = None;
+    while let Some(field) = multipart.next_field().await? {
+        if field.name() == Some("config_file") {
+            let bytes = field.bytes().await?;
+            if bytes.len() > MAX_CONFIG_SIZE {
+                return Err(topcoat::router::bad_request(
+                    "JSON configuration must be no larger than 1 MiB",
+                )
+                .into());
+            }
+            config_bytes = Some(bytes);
+            break;
+        }
+    }
+    let config_bytes = config_bytes.ok_or_else(|| {
+        topcoat::router::bad_request("The form did not contain a config_file upload")
+    })?;
+    let imported = match parse_imported_config(&config_bytes) {
+        Ok(config) => config,
+        Err(error) => return Err(topcoat::router::bad_request(error.to_string()).into()),
+    };
+
+    let state: &Arc<ProxyState> = app_context(cx);
+    let mut config_write = state.config.write().await;
+    if let Err(error) = state.config_store.save(&imported) {
+        tracing::error!("Failed to import configuration into SQLite: {}", error);
+        return Err(topcoat::router::internal_server_error(error).into());
+    }
+    *config_write = imported;
+
+    redirect_home(cx)
+}
+
 #[route(POST "/api/test-stream")]
 async fn test_stream(cx: &Cx) -> Result<topcoat::router::Response> {
     let state: &Arc<ProxyState> = app_context(cx);
@@ -329,6 +456,75 @@ fn redirect_home(cx: &Cx) -> Result<topcoat::router::Response> {
             topcoat::router::StatusCode::SEE_OTHER,
             [(topcoat::router::header::LOCATION, "/")],
         ),
+        cx,
+    )
+}
+
+#[route(GET "/api/chat")]
+async fn get_chat_inbox(cx: &Cx) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    topcoat::router::IntoResponse::into_response(
+        (
+            [(topcoat::router::header::CACHE_CONTROL, "no-store")],
+            Json(state.chat_inbox.lock().await.snapshot()),
+        ),
+        cx,
+    )
+}
+
+#[route(POST "/api/chat/acknowledge")]
+async fn acknowledge_chat_message(
+    cx: &Cx,
+    Json(request): Json<AcknowledgeChatMessage>,
+) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    let mut inbox = state.chat_inbox.lock().await;
+    if !inbox.acknowledge(request.id) {
+        return topcoat::router::IntoResponse::into_response(
+            (
+                topcoat::router::StatusCode::CONFLICT,
+                "The displayed chat message has already changed",
+            ),
+            cx,
+        );
+    }
+
+    topcoat::router::IntoResponse::into_response(Json(inbox.snapshot()), cx)
+}
+
+#[route(POST "/api/chat/ingest")]
+async fn ingest_chat_message(
+    cx: &Cx,
+    Json(message): Json<IncomingChatMessage>,
+) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    let Some(expected_token) = state.chat_ingest_token.as_deref() else {
+        return topcoat::router::IntoResponse::into_response(
+            (
+                topcoat::router::StatusCode::SERVICE_UNAVAILABLE,
+                "Chat ingest is disabled; configure CHAT_INGEST_TOKEN",
+            ),
+            cx,
+        );
+    };
+    if !bearer_token(cx).is_some_and(|submitted| token_matches(expected_token, submitted)) {
+        return Err(topcoat::router::unauthorized().into());
+    }
+
+    let mut inbox = state.chat_inbox.lock().await;
+    let outcome = match inbox.enqueue(message) {
+        Ok(EnqueueOutcome::Accepted) => "accepted",
+        Ok(EnqueueOutcome::Duplicate) => "duplicate",
+        Ok(EnqueueOutcome::Dropped) => "dropped",
+        Err(error) => return Err(topcoat::router::bad_request(error.to_string()).into()),
+    };
+    let response = ChatIngestResponse {
+        outcome,
+        inbox: inbox.snapshot(),
+    };
+
+    topcoat::router::IntoResponse::into_response(
+        (topcoat::router::StatusCode::ACCEPTED, Json(response)),
         cx,
     )
 }
@@ -454,6 +650,46 @@ mod tests {
             serde_qs::from_str("server%5Blisten%5D=127.0.0.1%3A1936&action=save").unwrap();
 
         assert!(form.server.is_none());
+    }
+
+    #[test]
+    fn exported_config_json_can_be_imported_without_losing_secrets() {
+        let original = populated_config();
+        let json = serde_json::to_vec_pretty(&original).unwrap();
+        let imported = parse_imported_config(&json).unwrap();
+
+        assert_eq!(imported.server.api_listen, original.server.api_listen);
+        assert_eq!(
+            imported.notifications.discord_webhook,
+            original.notifications.discord_webhook
+        );
+        assert_eq!(imported.targets[0].stream_key, "secret");
+        assert!(imported.targets[0].enabled);
+    }
+
+    #[test]
+    fn import_rejects_incomplete_or_invalid_configs() {
+        let incomplete = br#"{"server": {}, "targets": []}"#;
+        assert!(parse_imported_config(incomplete)
+            .unwrap_err()
+            .to_string()
+            .contains("notifications"));
+
+        let invalid_target = br#"{
+            "server": {},
+            "notifications": {},
+            "targets": [{
+                "name": "Twitch",
+                "url": "https://example.test/app",
+                "stream_key": "secret",
+                "public_url": null,
+                "enabled": true
+            }]
+        }"#;
+        assert!(parse_imported_config(invalid_target)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid URL"));
     }
 }
 

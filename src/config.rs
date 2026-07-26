@@ -1,11 +1,11 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerSettings {
     #[serde(default = "default_listen")]
     pub listen: SocketAddr,
@@ -39,7 +39,7 @@ impl Default for ServerSettings {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NotificationSettings {
     pub discord_webhook: Option<String>,
     #[serde(default = "default_live_message")]
@@ -61,7 +61,7 @@ impl Default for NotificationSettings {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TargetConfig {
     pub name: String,
     pub url: String,
@@ -77,7 +77,7 @@ fn default_enabled() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerSettings,

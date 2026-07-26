@@ -1,3 +1,4 @@
+mod chat;
 mod config;
 mod metrics;
 mod notifications;
@@ -6,11 +7,16 @@ mod server;
 mod web;
 
 use anyhow::{Context, Result};
+use chat::youtube::YouTubeChatConfig;
 use clap::{Parser, Subcommand};
 use config::ConfigStore;
 use metrics::{run_health_server, Metrics};
-use server::{run_rtmp_server, state::ProxyState};
+use server::{
+    run_rtmp_server,
+    state::{ChatRuntimeConfig, ProxyState},
+};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -24,6 +30,26 @@ struct CliArgs {
     /// Path to the SQLite database, or a legacy TOML file to import once
     #[arg(short, long, env = "CONFIG_PATH", default_value = "config.toml")]
     config: PathBuf,
+
+    /// Bearer token accepted by POST /api/chat/ingest
+    #[arg(long, env = "CHAT_INGEST_TOKEN", hide_env_values = true)]
+    chat_ingest_token: Option<String>,
+
+    /// Maximum number of displayed and waiting chat messages held in memory
+    #[arg(long, env = "CHAT_QUEUE_CAPACITY", default_value = "500")]
+    chat_queue_capacity: NonZeroUsize,
+
+    /// Secret used to verify Twitch EventSub webhook signatures
+    #[arg(long, env = "TWITCH_EVENTSUB_SECRET", hide_env_values = true)]
+    twitch_eventsub_secret: Option<String>,
+
+    /// Google API key used to read YouTube live chat
+    #[arg(long, env = "YOUTUBE_API_KEY", hide_env_values = true)]
+    youtube_api_key: Option<String>,
+
+    /// YouTube liveChatId to ingest
+    #[arg(long, env = "YOUTUBE_LIVE_CHAT_ID")]
+    youtube_live_chat_id: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -131,7 +157,32 @@ async fn main() -> Result<()> {
         http_client,
         listen_port,
         config_store,
+        ChatRuntimeConfig {
+            ingest_token: cli.chat_ingest_token,
+            queue_capacity: cli.chat_queue_capacity.get(),
+            twitch_eventsub_secret: cli.twitch_eventsub_secret,
+        },
     ));
+
+    match (cli.youtube_api_key, cli.youtube_live_chat_id) {
+        (Some(api_key), Some(live_chat_id))
+            if !api_key.trim().is_empty() && !live_chat_id.trim().is_empty() =>
+        {
+            let youtube_state = Arc::clone(&state);
+            tokio::spawn(chat::youtube::run(
+                youtube_state,
+                YouTubeChatConfig {
+                    api_key,
+                    live_chat_id,
+                },
+            ));
+            info!("YouTube live chat ingest enabled");
+        }
+        (None, None) => {}
+        _ => warn!(
+            "YouTube chat ingest requires both YOUTUBE_API_KEY and YOUTUBE_LIVE_CHAT_ID; adapter disabled"
+        ),
+    }
 
     // Spawn Web Server
     let web_state = Arc::clone(&state);

@@ -12,6 +12,7 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65536
 Environment=RUST_LOG=rtmp_proxy=info,rtmp_rs=info
+EnvironmentFile=-{WORK_DIR}/rtmp-proxy.env
 
 [Install]
 WantedBy=multi-user.target
