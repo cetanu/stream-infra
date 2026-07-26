@@ -6,14 +6,27 @@ readonly state_dir="/var/lib/rtmp-proxy"
 readonly bootstrap_config="/run/rtmp-proxy-bootstrap/config.toml"
 readonly persistent_config="${state_dir}/config.toml"
 readonly persistent_database="${state_dir}/config.sqlite3"
+readonly release_url="https://github.com/cetanu/stream-infra/releases/latest/download/rtmp-proxy"
+readonly checksum_url="${release_url}.sha256"
 
 mkdir -p "${work_dir}" "${state_dir}"
 chmod 0700 "${state_dir}"
 
-curl -fsSL -H "Cache-Control: no-cache" \
-    https://github.com/cetanu/stream-infra/releases/latest/download/rtmp-proxy \
-    -o "${work_dir}/rtmp-proxy"
-chmod 0755 "${work_dir}/rtmp-proxy"
+temporary_checksum="$(mktemp)"
+temporary_binary="$(mktemp)"
+trap 'rm -f "${temporary_checksum}" "${temporary_binary}"' EXIT
+curl -fsSL -H "Cache-Control: no-cache" "${checksum_url}" -o "${temporary_checksum}"
+expected_hash="$(awk 'NF { print $1; exit }' "${temporary_checksum}")"
+if [[ ! "${expected_hash}" =~ ^[[:xdigit:]]{64}$ ]]; then
+    echo "Release checksum is invalid" >&2
+    exit 1
+fi
+curl -fsSL -H "Cache-Control: no-cache" "${release_url}" -o "${temporary_binary}"
+if [[ "$(sha256sum "${temporary_binary}" | awk '{print $1}')" != "${expected_hash}" ]]; then
+    echo "Downloaded RTMP proxy binary does not match its release checksum" >&2
+    exit 1
+fi
+install -m 0755 "${temporary_binary}" "${work_dir}/rtmp-proxy"
 
 root_source="$(findmnt -n -o SOURCE /)"
 root_disk="$(lsblk -no PKNAME "${root_source}" | head -n 1)"
