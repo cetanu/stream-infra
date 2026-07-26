@@ -2,6 +2,8 @@
 set -euo pipefail
 
 readonly binary_path="/opt/rtmp-proxy/rtmp-proxy"
+readonly work_dir="/opt/rtmp-proxy"
+readonly config_path="${work_dir}/config.toml"
 readonly release_url="https://github.com/cetanu/stream-infra/releases/latest/download/rtmp-proxy"
 readonly checksum_url="${release_url}.sha256"
 
@@ -34,5 +36,8 @@ if [[ "$(sha256sum "${temporary_binary}" | awk '{print $1}')" != "${expected_has
 fi
 chmod 0755 "${temporary_binary}"
 install -m 0755 "${temporary_binary}" "${binary_path}"
+"${binary_path}" install-systemd \
+    --work-dir "${work_dir}" \
+    --config-path "${config_path}"
 systemctl restart rtmp-proxy.service
 echo "Updated and restarted the RTMP proxy."

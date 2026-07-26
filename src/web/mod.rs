@@ -25,6 +25,8 @@ use components::{
     server_settings::server_settings, targets::targets, web_auth::web_auth,
 };
 
+pub(crate) const TAILWIND_STYLESHEET: topcoat::asset::Asset = topcoat::tailwind::stylesheet!();
+
 pub async fn run_web_server(
     state: Arc<ProxyState>,
     addr: std::net::SocketAddr,
@@ -55,7 +57,7 @@ async fn home() -> Result {
             <title>"Stream Infrastructure Proxy"</title>
             <meta name="description" content="Configuration dashboard for the RTMP Stream Multiplexer." />
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-            <link rel="stylesheet" href=(topcoat::tailwind::stylesheet!()) />
+            <link rel="stylesheet" href=(TAILWIND_STYLESHEET) />
             topcoat::runtime::script()
         </head>
         <body class="min-h-screen bg-background text-foreground font-sans antialiased relative">

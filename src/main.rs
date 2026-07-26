@@ -1,5 +1,6 @@
 mod chat;
 mod config;
+mod embedded_assets;
 mod metrics;
 mod notifications;
 mod server;
@@ -55,6 +56,9 @@ enum Commands {
 fn install_systemd(work_dir: &Path, config_path: &Path) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("Failed to determine path of current executable")?;
+
+    embedded_assets::install(&current_exe, web::TAILWIND_STYLESHEET)
+        .context("Failed to install embedded web assets")?;
 
     let state_dir = config_path
         .parent()
