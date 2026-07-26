@@ -93,7 +93,7 @@ pub struct ChatSettings {
     #[serde(default = "default_chat_queue_capacity")]
     pub queue_capacity: usize,
     #[serde(default)]
-    pub twitch_eventsub_secret: Option<String>,
+    pub twitch_channel: Option<String>,
     #[serde(default)]
     pub youtube_api_key: Option<String>,
     #[serde(default)]
@@ -125,7 +125,7 @@ impl Default for ChatSettings {
         Self {
             ingest_token: None,
             queue_capacity: default_chat_queue_capacity(),
-            twitch_eventsub_secret: None,
+            twitch_channel: None,
             youtube_api_key: None,
             youtube_live_chat_id: None,
             youtube_video_id: None,
@@ -190,16 +190,15 @@ impl AppConfig {
         {
             bail!("Chat ingest token must be at least 16 characters");
         }
-        if self
-            .chat
-            .twitch_eventsub_secret
-            .as_ref()
-            .is_some_and(|secret| {
-                let length = secret.len();
-                length != 0 && !(10..=100).contains(&length)
-            })
-        {
-            bail!("Twitch EventSub secret must be between 10 and 100 characters");
+        if self.chat.twitch_channel.as_ref().is_some_and(|channel| {
+            let channel = channel.trim().trim_start_matches('#');
+            channel.is_empty()
+                || channel.len() > 25
+                || !channel
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        }) {
+            bail!("Twitch channel must be 1-25 ASCII letters, numbers, or underscores");
         }
         if self.chat.queue_capacity == 0 {
             bail!("Chat queue capacity must be positive");
@@ -370,7 +369,7 @@ impl ConfigStore {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 ingest_token TEXT,
                 queue_capacity INTEGER NOT NULL,
-                twitch_eventsub_secret TEXT,
+                twitch_channel TEXT,
                 youtube_api_key TEXT,
                 youtube_live_chat_id TEXT,
                 youtube_video_id TEXT,
@@ -380,6 +379,34 @@ impl ConfigStore {
             );
             ",
         )?;
+        let has_twitch_channel: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info('chat_settings')
+                WHERE name = 'twitch_channel'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_twitch_channel {
+            connection.execute(
+                "ALTER TABLE chat_settings ADD COLUMN twitch_channel TEXT",
+                [],
+            )?;
+        }
+        let has_eventsub_secret: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info('chat_settings')
+                WHERE name = 'twitch_eventsub_secret'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_eventsub_secret {
+            connection.execute(
+                "ALTER TABLE chat_settings DROP COLUMN twitch_eventsub_secret",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -466,7 +493,7 @@ impl ConfigStore {
             .unwrap_or_default();
         let chat = connection
             .query_row(
-                "SELECT ingest_token, queue_capacity, twitch_eventsub_secret,
+                "SELECT ingest_token, queue_capacity, twitch_channel,
                         youtube_api_key, youtube_live_chat_id, youtube_video_id,
                         youtube_channel_id, youtube_min_poll_interval_secs,
                         youtube_adaptive_polling
@@ -476,7 +503,7 @@ impl ConfigStore {
                     Ok(ChatSettings {
                         ingest_token: row.get(0)?,
                         queue_capacity: row.get::<_, i64>(1)? as usize,
-                        twitch_eventsub_secret: row.get(2)?,
+                        twitch_channel: row.get(2)?,
                         youtube_api_key: row.get(3)?,
                         youtube_live_chat_id: row.get(4)?,
                         youtube_video_id: row.get(5)?,
@@ -561,7 +588,7 @@ impl ConfigStore {
         )?;
         transaction.execute(
             "INSERT INTO chat_settings (
-                id, ingest_token, queue_capacity, twitch_eventsub_secret,
+                id, ingest_token, queue_capacity, twitch_channel,
                 youtube_api_key, youtube_live_chat_id, youtube_video_id,
                 youtube_channel_id, youtube_min_poll_interval_secs,
                 youtube_adaptive_polling
@@ -569,7 +596,7 @@ impl ConfigStore {
              ON CONFLICT(id) DO UPDATE SET
                 ingest_token = excluded.ingest_token,
                 queue_capacity = excluded.queue_capacity,
-                twitch_eventsub_secret = excluded.twitch_eventsub_secret,
+                twitch_channel = excluded.twitch_channel,
                 youtube_api_key = excluded.youtube_api_key,
                 youtube_live_chat_id = excluded.youtube_live_chat_id,
                 youtube_video_id = excluded.youtube_video_id,
@@ -579,7 +606,7 @@ impl ConfigStore {
             params![
                 config.chat.ingest_token,
                 config.chat.queue_capacity as i64,
-                config.chat.twitch_eventsub_secret,
+                config.chat.twitch_channel,
                 config.chat.youtube_api_key,
                 config.chat.youtube_live_chat_id,
                 config.chat.youtube_video_id,
@@ -614,12 +641,12 @@ mod tests {
             .contains("at least 16"));
 
         config.chat.ingest_token = None;
-        config.chat.twitch_eventsub_secret = Some("short".into());
+        config.chat.twitch_channel = Some("invalid-channel!".into());
         assert!(config
             .validate()
             .unwrap_err()
             .to_string()
-            .contains("between 10 and 100"));
+            .contains("letters, numbers, or underscores"));
     }
 
     #[test]

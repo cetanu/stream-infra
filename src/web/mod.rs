@@ -18,7 +18,6 @@ use topcoat::{
 
 pub mod auth;
 pub mod components;
-pub mod twitch;
 use components::{
     actions_panel::actions_panel, chat_inbox::chat_inbox, chat_settings::chat_settings,
     config_transfer::config_transfer, metrics::metrics_grid, notifications::notifications,
@@ -167,9 +166,7 @@ struct ChatForm {
     #[serde(default)]
     clear_ingest_token: bool,
     queue_capacity: Option<usize>,
-    twitch_eventsub_secret: Option<String>,
-    #[serde(default)]
-    clear_twitch_eventsub_secret: bool,
+    twitch_channel: Option<String>,
     youtube_api_key: Option<String>,
     #[serde(default)]
     clear_youtube_api_key: bool,
@@ -267,11 +264,8 @@ fn merge_form(current: &AppConfig, form: ConfigForm) -> anyhow::Result<AppConfig
                 config.chat.ingest_token,
             ),
             queue_capacity: chat.queue_capacity.unwrap_or(config.chat.queue_capacity),
-            twitch_eventsub_secret: updated_secret(
-                chat.twitch_eventsub_secret,
-                chat.clear_twitch_eventsub_secret,
-                config.chat.twitch_eventsub_secret,
-            ),
+            twitch_channel: non_empty(chat.twitch_channel)
+                .map(|channel| channel.trim_start_matches('#').to_ascii_lowercase()),
             youtube_api_key: updated_secret(
                 chat.youtube_api_key,
                 chat.clear_youtube_api_key,
@@ -670,7 +664,7 @@ mod tests {
             },
             chat: ChatSettings {
                 ingest_token: Some("generic-ingest-token".into()),
-                twitch_eventsub_secret: Some("twitch-secret".into()),
+                twitch_channel: Some("streamer".into()),
                 youtube_api_key: Some("youtube-api-key".into()),
                 ..ChatSettings::default()
             },
@@ -777,7 +771,7 @@ mod tests {
             .use_form_encoding(true)
             .deserialize_str(
                 "web_auth%5Busername%5D=operator&web_auth%5Bpassword%5D=&\
-                 chat%5Bingest_token%5D=&chat%5Btwitch_eventsub_secret%5D=&\
+                 chat%5Bingest_token%5D=&chat%5Btwitch_channel%5D=streamer&\
                  chat%5Byoutube_api_key%5D=&chat%5Bqueue_capacity%5D=250&action=save",
             )
             .unwrap();
@@ -788,10 +782,7 @@ mod tests {
             updated.chat.ingest_token.as_deref(),
             Some("generic-ingest-token")
         );
-        assert_eq!(
-            updated.chat.twitch_eventsub_secret.as_deref(),
-            Some("twitch-secret")
-        );
+        assert_eq!(updated.chat.twitch_channel.as_deref(), Some("streamer"));
         assert_eq!(
             updated.chat.youtube_api_key.as_deref(),
             Some("youtube-api-key")

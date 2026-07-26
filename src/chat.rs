@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod twitch;
 pub mod youtube;
 
 #[derive(Debug, Clone, Deserialize)]

@@ -18,7 +18,7 @@ separately from the deployment and is not provisioned as Block Storage.
 
 - Rust RTMP ingest, relay, health, and web services
 - Topcoat-based configuration and chat dashboard
-- Twitch EventSub and YouTube Live chat ingestion
+- Anonymous Twitch IRC and YouTube Live chat ingestion
 - SQLite-backed configuration and chat queue
 - Caddy TLS termination
 - Pulumi-managed Vultr compute, networking, and firewall

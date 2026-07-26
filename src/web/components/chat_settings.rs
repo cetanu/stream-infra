@@ -52,15 +52,11 @@ pub async fn chat_settings(cx: &Cx) -> Result {
                     </div>
 
                     <div class="grid gap-6 md:grid-cols-2">
-                        secret_field(
-                            id: "twitch_eventsub_secret",
-                            name: "chat[twitch_eventsub_secret]",
-                            clear_name: "chat[clear_twitch_eventsub_secret]",
-                            label_text: "Twitch EventSub secret",
-                            configured: chat
-                                .twitch_eventsub_secret
-                                .as_ref()
-                                .is_some_and(|value| !value.trim().is_empty())
+                        text_field(
+                            id: "twitch_channel",
+                            name: "chat[twitch_channel]",
+                            label_text: "Twitch channel",
+                            value: chat.twitch_channel
                         )
                         secret_field(
                             id: "youtube_api_key",

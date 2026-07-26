@@ -16,8 +16,8 @@ password = ""
 ingest_token = ""
 queue_capacity = 500
 
-# Twitch sends channel.chat.message events to /api/chat/twitch/eventsub.
-twitch_eventsub_secret = ""
+# Twitch channel to read anonymously over IRC (with or without a leading #).
+twitch_channel = ""
 
 # Configure a YouTube API key and at most one selector.
 youtube_api_key = ""

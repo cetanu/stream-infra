@@ -266,7 +266,7 @@ func main() {
 			Subnet:          pulumi.String("0.0.0.0"),
 			SubnetSize:      pulumi.Int(0),
 			Port:            pulumi.String("443"),
-			Notes:           pulumi.String("Allow HTTPS globally for web access and Twitch EventSub"),
+			Notes:           pulumi.String("Allow HTTPS globally for authenticated web access"),
 		}, pulumi.IgnoreChanges([]string{"source"}))
 		if err != nil {
 			return err
@@ -279,7 +279,7 @@ func main() {
 			Subnet:          pulumi.String("::"),
 			SubnetSize:      pulumi.Int(0),
 			Port:            pulumi.String("443"),
-			Notes:           pulumi.String("Allow IPv6 HTTPS globally for web access and Twitch EventSub"),
+			Notes:           pulumi.String("Allow IPv6 HTTPS globally for authenticated web access"),
 		}, pulumi.IgnoreChanges([]string{"source"}))
 		if err != nil {
 			return err

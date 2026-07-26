@@ -19,6 +19,7 @@ pub struct ProxyState {
     pub active_relays: Mutex<HashMap<String, Vec<Child>>>,
     pub chat_inbox: Mutex<ChatInbox>,
     pub youtube_status: RwLock<Option<YouTubeIngestStatus>>,
+    twitch_task: Mutex<Option<JoinHandle<()>>>,
     youtube_task: Mutex<Option<JoinHandle<()>>>,
     pub listen_port: u16,
     pub config_store: ConfigStore,
@@ -40,6 +41,7 @@ impl ProxyState {
             active_relays: Mutex::new(HashMap::new()),
             chat_inbox: Mutex::new(chat_inbox),
             youtube_status: RwLock::new(None),
+            twitch_task: Mutex::new(None),
             youtube_task: Mutex::new(None),
             listen_port,
             config_store,
@@ -50,10 +52,24 @@ impl ProxyState {
         let chat = self.config.read().await.chat.clone();
         self.chat_inbox.lock().await.resize(chat.queue_capacity)?;
 
+        if let Some(task) = self.twitch_task.lock().await.take() {
+            task.abort();
+        }
         if let Some(task) = self.youtube_task.lock().await.take() {
             task.abort();
         }
         *self.youtube_status.write().await = None;
+
+        if let Some(channel) = chat
+            .twitch_channel
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().trim_start_matches('#').to_ascii_lowercase())
+        {
+            let state = Arc::clone(self);
+            let task = tokio::spawn(crate::chat::twitch::run(state, channel.clone()));
+            *self.twitch_task.lock().await = Some(task);
+            tracing::info!(channel, "Twitch anonymous IRC ingest configured");
+        }
 
         let Some(api_key) = chat
             .youtube_api_key
