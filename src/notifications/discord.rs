@@ -1,3 +1,4 @@
+use crate::notifications::NotificationTarget;
 use anyhow::Result;
 use reqwest::Client;
 use tracing::{info, warn};
@@ -17,7 +18,7 @@ impl DiscordNotifier {
         }
     }
 
-    pub async fn notify(&self, _stream_key: &str, targets: &[crate::config::TargetConfig]) -> Result<()> {
+    pub async fn notify(&self, targets: &[NotificationTarget]) -> Result<()> {
         if self.webhook_url.trim().is_empty() {
             return Ok(());
         }
@@ -36,7 +37,10 @@ impl DiscordNotifier {
         let description = if links.is_empty() {
             "The stream has started.".to_string()
         } else {
-            format!("The stream has started.\n\n**Watch live on:**\n{}", links.join("\n"))
+            format!(
+                "The stream has started.\n\n**Watch live on:**\n{}",
+                links.join("\n")
+            )
         };
 
         let payload = serde_json::json!({
@@ -53,14 +57,15 @@ impl DiscordNotifier {
             ]
         });
 
-        if let Err(e) = self
+        if self
             .http_client
             .post(&self.webhook_url)
             .json(&payload)
             .send()
             .await
+            .is_err()
         {
-            warn!(error = %e, "Failed to send Discord webhook notification");
+            warn!("Failed to send Discord webhook notification");
         }
 
         Ok(())

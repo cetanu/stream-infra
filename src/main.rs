@@ -5,9 +5,9 @@ mod server;
 
 mod web;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use config::AppConfig;
+use config::ConfigStore;
 use metrics::{run_health_server, Metrics};
 use server::{run_rtmp_server, state::ProxyState};
 use std::fs;
@@ -21,7 +21,7 @@ const SYSTEMD_UNIT_TEMPLATE: &str = include_str!("../systemd/rtmp-proxy.service"
 #[derive(Parser, Debug)]
 #[command(author, version, about = "RTMP Stream Multiplexer powered by rtmp-rs", long_about = None)]
 struct CliArgs {
-    /// Path to TOML configuration file
+    /// Path to the SQLite database, or a legacy TOML file to import once
     #[arg(short, long, env = "CONFIG_PATH", default_value = "config.toml")]
     config: PathBuf,
 
@@ -100,16 +100,10 @@ async fn main() -> Result<()> {
         return install_systemd(&work_dir, &config_path);
     }
 
-    if !cli.config.exists() {
-        bail!(
-            "Configuration file '{:?}' does not exist. Create the config file or specify --config <path>",
-            cli.config
-        );
-    }
-
-    info!(path = ?cli.config, "Loading configuration file");
-    let config = AppConfig::load_from_file(&cli.config)?;
+    info!(path = ?cli.config, "Loading configuration");
+    let (config_store, config) = ConfigStore::open(&cli.config)?;
     config.validate()?;
+    info!(path = %config_store.path().display(), "Using SQLite configuration database");
 
     let metrics = Arc::new(Metrics::default());
     let http_client = reqwest::Client::builder()
@@ -131,14 +125,12 @@ async fn main() -> Result<()> {
 
     let web_addr = config.server.api_listen;
     let listen_port = config.server.listen.port();
-    let config_path = cli.config.clone();
-
     let state = Arc::new(ProxyState::new(
         Arc::clone(&metrics),
         config,
         http_client,
         listen_port,
-        config_path,
+        config_store,
     ));
 
     // Spawn Web Server

@@ -7,6 +7,21 @@ use generic::GenericWebhookNotifier;
 use reqwest::Client;
 use std::sync::Arc;
 
+#[derive(Clone)]
+pub struct NotificationTarget {
+    pub name: String,
+    pub public_url: Option<String>,
+}
+
+impl From<&crate::config::TargetConfig> for NotificationTarget {
+    fn from(target: &crate::config::TargetConfig) -> Self {
+        Self {
+            name: target.name.clone(),
+            public_url: target.public_url.clone(),
+        }
+    }
+}
+
 pub struct NotificationDispatcher {
     discord: Option<DiscordNotifier>,
     generic: Option<GenericWebhookNotifier>,
@@ -29,13 +44,13 @@ impl NotificationDispatcher {
         Arc::new(Self { discord, generic })
     }
 
-    pub async fn dispatch(&self, stream_key: &str, targets: &[crate::config::TargetConfig]) {
+    pub async fn dispatch(&self, targets: &[NotificationTarget]) {
         if let Some(ref d) = self.discord {
-            let _ = d.notify(stream_key, targets).await;
+            let _ = d.notify(targets).await;
         }
 
         if let Some(ref g) = self.generic {
-            let _ = g.notify(stream_key, targets).await;
+            let _ = g.notify(targets).await;
         }
     }
 }

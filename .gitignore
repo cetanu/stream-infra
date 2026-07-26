@@ -24,6 +24,6 @@ target/**
 
 # Stream Multiplexer Config Secrets
 config.toml
+*.sqlite3
 *.key
 *.pem
-

@@ -3,6 +3,7 @@ use rtmp_rs::protocol::message::{ConnectParams, PublishParams};
 use rtmp_rs::session::context::StreamContext;
 use rtmp_rs::session::SessionContext;
 use rtmp_rs::{AuthResult, RtmpHandler};
+use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -34,7 +35,6 @@ impl RtmpHandler for ProxyHandler {
         let stream_key = params.stream_key.clone();
         info!(
             session_id = %ctx.session_id,
-            stream_key = %stream_key,
             "Stream published from client"
         );
 
@@ -53,10 +53,12 @@ impl RtmpHandler for ProxyHandler {
         drop(config);
 
         // Dispatch notifications asynchronously
-        let key_clone = stream_key.clone();
-        let targets_clone = active_targets.clone();
+        let notification_targets = active_targets
+            .iter()
+            .map(crate::notifications::NotificationTarget::from)
+            .collect::<Vec<_>>();
         tokio::spawn(async move {
-            dispatcher.dispatch(&key_clone, &targets_clone).await;
+            dispatcher.dispatch(&notification_targets).await;
         });
 
         if active_targets.is_empty() {
@@ -72,7 +74,15 @@ impl RtmpHandler for ProxyHandler {
         );
 
         for target in active_targets {
-            info!(name = %target.name, url = %target.url, "Launching stream relay forwarder");
+            let target_full_url = if target.stream_key.is_empty() {
+                target.url.clone()
+            } else if target.url.ends_with('/') {
+                format!("{}{}", target.url, target.stream_key)
+            } else {
+                format!("{}/{}", target.url, target.stream_key)
+            };
+
+            info!(name = %target.name, "Launching stream relay forwarder");
 
             let child = tokio::process::Command::new("ffmpeg")
                 .args([
@@ -84,8 +94,12 @@ impl RtmpHandler for ProxyHandler {
                     "copy",
                     "-f",
                     "flv",
-                    &target.url,
+                    &target_full_url,
                 ])
+                // ffmpeg includes complete input/output URLs in some diagnostics.
+                // Both URLs contain credentials, so never inherit its output.
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .spawn();
 
             match child {
@@ -104,14 +118,14 @@ impl RtmpHandler for ProxyHandler {
     }
 
     async fn on_unpublish(&self, ctx: &StreamContext) {
-        info!(stream_key = %ctx.stream_key, "Stream stopped publishing");
+        info!("Stream stopped publishing");
 
         let mut relays = self.state.active_relays.lock().await;
         if let Some(mut children) = relays.remove(&ctx.stream_key) {
             for mut child in children.drain(..) {
                 let _ = child.kill().await;
             }
-            info!(stream_key = %ctx.stream_key, "Stopped all active relay forwarders");
+            info!("Stopped all active relay forwarders");
         }
     }
 
