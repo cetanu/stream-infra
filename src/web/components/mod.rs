@@ -5,6 +5,7 @@ pub mod config_transfer;
 pub mod metrics;
 pub mod notifications;
 pub mod server_settings;
+pub mod stream_preview;
 pub mod targets;
 pub mod ui;
 pub mod web_auth;

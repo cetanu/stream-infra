@@ -26,12 +26,19 @@ pub mod components;
 use components::{
     actions_panel::actions_panel, chat_inbox::chat_inbox, chat_settings::chat_settings,
     config_transfer::config_transfer, metrics::metrics_grid, notifications::notifications,
-    server_settings::server_settings, targets::targets, web_auth::web_auth,
+    server_settings::server_settings, stream_preview::stream_preview, targets::targets,
+    web_auth::web_auth,
 };
 
 pub(crate) const TAILWIND_STYLESHEET: topcoat::asset::Asset = topcoat::tailwind::stylesheet!();
 pub(crate) const CHAT_EVENTS_SCRIPT: topcoat::asset::Asset =
     topcoat::asset::asset!("static/chat-events.js");
+pub(crate) const HLS_PLAYER_SCRIPT: topcoat::asset::Asset =
+    topcoat::asset::asset!("static/hls.min.js");
+pub(crate) const HLS_PLAYER_LICENSE: topcoat::asset::Asset =
+    topcoat::asset::asset!("static/hls.LICENSE.txt");
+pub(crate) const STREAM_PREVIEW_SCRIPT: topcoat::asset::Asset =
+    topcoat::asset::asset!("static/stream-preview.js");
 
 pub async fn run_web_server(
     state: Arc<ProxyState>,
@@ -65,11 +72,14 @@ async fn home() -> Result {
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
             <link rel="stylesheet" href=(TAILWIND_STYLESHEET) />
             topcoat::runtime::script()
+            <script src=(HLS_PLAYER_SCRIPT) defer="defer"></script>
+            <script src=(STREAM_PREVIEW_SCRIPT) defer="defer"></script>
             <script src=(CHAT_EVENTS_SCRIPT) defer="defer"></script>
         </head>
         <body class="min-h-screen bg-background text-foreground font-sans antialiased relative">
             <div class="container mx-auto max-w-7xl px-4 py-8">
                 metrics_grid()
+                stream_preview()
                 chat_inbox()
 
                 <form id="configForm" method="post" action="/api/config" class="grid grid-cols-1 gap-6 lg:grid-cols-2 relative">
@@ -85,6 +95,64 @@ async fn home() -> Result {
         </body>
         </html>
     }
+}
+
+#[topcoat::router::path_param]
+struct PreviewFile(str);
+
+#[route(GET "/api/preview/{preview_file}")]
+async fn get_preview_file(cx: &Cx) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    let name = topcoat::router::path_param::<PreviewFile>(cx);
+    let Some(path) = state.preview_file(name) else {
+        return Err(topcoat::router::not_found().into());
+    };
+    let bytes = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(topcoat::router::not_found().into());
+        }
+        Err(error) => return Err(topcoat::router::internal_server_error(error).into()),
+    };
+    let content_type = if name.ends_with(".m3u8") {
+        "application/vnd.apple.mpegurl"
+    } else {
+        "video/mp2t"
+    };
+    let mut response = topcoat::router::Response::new(topcoat::router::Body::from(bytes));
+    response.headers_mut().insert(
+        topcoat::router::header::CONTENT_TYPE,
+        topcoat::router::HeaderValue::from_static(content_type),
+    );
+    response.headers_mut().insert(
+        topcoat::router::header::CACHE_CONTROL,
+        topcoat::router::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+#[route(GET "/api/stream/status")]
+async fn get_stream_status(cx: &Cx) -> Result<Json<crate::server::state::StreamStatus>> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    Ok(Json(state.stream_status().await))
+}
+
+#[route(POST "/api/stream/publish")]
+async fn publish_stream(cx: &Cx) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    if let Err(error) = state.publish_staged_stream().await {
+        return Err(topcoat::router::bad_request(error.to_string()).into());
+    }
+    topcoat::router::IntoResponse::into_response(topcoat::router::StatusCode::NO_CONTENT, cx)
+}
+
+#[route(POST "/api/stream/stop-publishing")]
+async fn stop_publishing_stream(cx: &Cx) -> Result<topcoat::router::Response> {
+    let state: &Arc<ProxyState> = app_context(cx);
+    if let Err(error) = state.stop_publishing().await {
+        return Err(topcoat::router::bad_request(error.to_string()).into());
+    }
+    topcoat::router::IntoResponse::into_response(topcoat::router::StatusCode::NO_CONTENT, cx)
 }
 
 #[derive(Debug, Deserialize)]
@@ -940,8 +1008,8 @@ async fn get_metrics(cx: &Cx) -> Result<Json<WebMetrics>> {
         .total_connections
         .load(std::sync::atomic::Ordering::Relaxed);
 
+    let active_streams = usize::from(state.stream_status().await.active);
     let relays_guard = state.active_relays.lock().await;
-    let active_streams = relays_guard.len();
     let active_relays = relays_guard.values().map(|v| v.len()).sum();
     drop(relays_guard);
 

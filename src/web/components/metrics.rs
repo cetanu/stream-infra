@@ -25,8 +25,8 @@ pub async fn metrics_grid(cx: &Cx) -> Result {
     let state: &Arc<ProxyState> = app_context(cx);
     let active_connections = state.metrics.active_connections.load(Ordering::Relaxed);
     let total_connections = state.metrics.total_connections.load(Ordering::Relaxed);
+    let active_streams = usize::from(state.stream_status().await.active);
     let relays = state.active_relays.lock().await;
-    let active_streams = relays.len();
     let active_relays: usize = relays.values().map(Vec::len).sum();
 
     view! {
