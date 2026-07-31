@@ -100,7 +100,6 @@ pub async fn targets(cx: &Cx) -> Result {
 
     view! {
         card(
-            attrs: attributes! { class="mb-8" },
             card_header(
                 attrs: attributes! { class="flex flex-row justify-between items-center" },
                 card_title("RTMP Targets")

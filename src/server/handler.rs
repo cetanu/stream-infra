@@ -12,6 +12,10 @@ pub struct ProxyHandler {
     pub state: Arc<ProxyState>,
 }
 
+fn should_dispatch_notifications(stream_key: &str) -> bool {
+    stream_key != super::TEST_STREAM_KEY
+}
+
 impl RtmpHandler for ProxyHandler {
     async fn on_connect(&self, ctx: &SessionContext, params: &ConnectParams) -> AuthResult {
         info!(
@@ -46,10 +50,12 @@ impl RtmpHandler for ProxyHandler {
             .cloned()
             .collect();
 
-        let dispatcher = crate::notifications::NotificationDispatcher::new(
-            &config.notifications,
-            self.state.http_client.clone(),
-        );
+        let dispatcher = should_dispatch_notifications(&stream_key).then(|| {
+            crate::notifications::NotificationDispatcher::new(
+                &config.notifications,
+                self.state.http_client.clone(),
+            )
+        });
         drop(config);
 
         // Dispatch notifications asynchronously
@@ -57,9 +63,13 @@ impl RtmpHandler for ProxyHandler {
             .iter()
             .map(crate::notifications::NotificationTarget::from)
             .collect::<Vec<_>>();
-        tokio::spawn(async move {
-            dispatcher.dispatch(&notification_targets).await;
-        });
+        if let Some(dispatcher) = dispatcher {
+            tokio::spawn(async move {
+                dispatcher.dispatch(&notification_targets).await;
+            });
+        } else {
+            info!("Skipping going-live notifications for test stream");
+        }
 
         if active_targets.is_empty() {
             info!("No active targets enabled. Ingesting stream locally without forwarding.");
@@ -135,5 +145,17 @@ impl RtmpHandler for ProxyHandler {
             .metrics
             .active_connections
             .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::TEST_STREAM_KEY;
+
+    #[test]
+    fn test_stream_is_notification_silent() {
+        assert!(!should_dispatch_notifications(TEST_STREAM_KEY));
+        assert!(should_dispatch_notifications("regular_stream"));
     }
 }

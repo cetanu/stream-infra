@@ -15,12 +15,12 @@ pub async fn server_settings(cx: &Cx) -> Result {
     let config = state.config.read().await;
     view! {
         card(
-            attrs: attributes! { class="mb-8" },
+            attrs: attributes! { class="h-full" },
             card_header(
                 card_title("Server Settings")
             )
             card_content(
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="flex-1 flex flex-col gap-2">
                         label(attrs: attributes! { for="server_listen" }, "RTMP Listen Address")
                         input(attrs: attributes! {
@@ -49,6 +49,18 @@ pub async fn server_settings(cx: &Cx) -> Result {
                             name="server[api_listen]"
                             value=(config.server.api_listen.to_string())
                             placeholder="0.0.0.0:3000"
+                        })
+                    </div>
+                    <div class="flex-1 flex flex-col gap-2">
+                        label(attrs: attributes! { for="test_stream_duration_secs" }, "Test Stream Duration (seconds)")
+                        input(attrs: attributes! {
+                            type="number"
+                            id="test_stream_duration_secs"
+                            name="server[test_stream_duration_secs]"
+                            value=(config.server.test_stream_duration_secs.to_string())
+                            min="1"
+                            max="86400"
+                            step="1"
                         })
                     </div>
                 </div>

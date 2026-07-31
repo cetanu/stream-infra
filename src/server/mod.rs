@@ -1,6 +1,8 @@
 pub mod handler;
 pub mod state;
 
+pub const TEST_STREAM_KEY: &str = "_stream_infra_test";
+
 use anyhow::{Context, Result};
 use handler::ProxyHandler;
 use rtmp_rs::{RtmpServer, ServerConfig};

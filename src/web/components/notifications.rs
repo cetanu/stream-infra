@@ -16,7 +16,7 @@ pub async fn notifications(cx: &Cx) -> Result {
     let config = state.config.read().await;
     view! {
         card(
-            attrs: attributes! { class="mb-8" },
+            attrs: attributes! { class="h-full" },
             card_header(
                 card_title("Notifications")
             )
@@ -32,7 +32,7 @@ pub async fn notifications(cx: &Cx) -> Result {
                         >(config.notifications.live_message.clone())</textarea>
                     </div>
 
-                    <div class="flex flex-col md:flex-row gap-6">
+                    <div class="flex flex-col gap-6">
                         <div class="flex-1 flex flex-col gap-2">
                             label(attrs: attributes! { for="discord_webhook" }, "Discord Webhook URL (Optional)")
                             input(attrs: attributes! {

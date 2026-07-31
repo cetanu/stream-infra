@@ -17,7 +17,7 @@ pub async fn actions_panel() -> Result {
                         formmethod="post"
                         formnovalidate="formnovalidate"
                     },
-                    "Test 15s Stream"
+                    "Test Stream"
                 )
                 button(
                     variant: ButtonVariant::Outline,

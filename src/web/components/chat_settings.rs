@@ -16,7 +16,7 @@ pub async fn chat_settings(cx: &Cx) -> Result {
     let chat = state.config.read().await.chat.clone();
     view! {
         card(
-            attrs: attributes! { class="mb-8" },
+            attrs: attributes! { class="h-full" },
             card_header(
                 <div class="flex flex-col gap-1">
                     card_title("Chat Ingest")

@@ -4,6 +4,7 @@
 listen = "0.0.0.0:1935"
 health_listen = "127.0.0.1:8080"
 api_listen = "0.0.0.0:3000"
+test_stream_duration_secs = 15
 
 [web_auth]
 # Leave empty for local development without authentication. Pulumi deployments

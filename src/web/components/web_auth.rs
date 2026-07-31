@@ -15,7 +15,7 @@ pub async fn web_auth(cx: &Cx) -> Result {
     let auth = state.config.read().await.web_auth.clone();
     view! {
         card(
-            attrs: attributes! { class="mb-8" },
+            attrs: attributes! { class="h-full" },
             card_header(
                 card_title("Web Authentication")
             )
