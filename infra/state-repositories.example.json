@@ -1,0 +1,10 @@
+[
+  {
+    "url": "https://github.com/cetanu/rtmp-manager.git",
+    "branch": "master",
+    "root": "salt",
+    "pillarRoot": "pillar",
+    "state": "rtmp-manager",
+    "repositoryId": 1319130100
+  }
+]
