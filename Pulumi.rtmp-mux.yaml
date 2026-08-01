@@ -17,3 +17,35 @@ config:
         "repositoryId": 1319130100
       }
     ]
+  stream-infra:firewallRules: |-
+    [
+      {
+        "name":"http",
+        "protocol":"tcp",
+        "ipType":"v4",
+        "subnet":"0.0.0.0",
+        "subnetSize":0,
+        "port":"80",
+        "notes":"Public HTTP"
+      },
+      {
+        "name":"https",
+        "protocol":"tcp",
+        "ipType":"v4",
+        "subnet":"0.0.0.0",
+        "subnetSize":0,
+        "port":"443",
+        "notes":"Public HTTPS"
+      },
+      {
+        "name":"rtmp",
+        "protocol":"tcp",
+        "ipType":"v4",
+        "subnet":"0.0.0.0",
+        "subnetSize":0,
+        "port":"1935",
+        "notes":"stream"
+      }
+    ]
+  stream-infra:webhookHost:
+    secure: v1:MlLppk/jz0dGiCq7:OdzNRfdRMeBsIVPPGXcY7u+tEDLnZxwegy945qKsLMYanz8=
