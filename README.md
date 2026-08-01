@@ -29,8 +29,7 @@ pulumi config set vultr:apiKey --secret
 pulumi config set stateRepositories "$(jq -c . state-repositories.example.json)"
 pulumi config set webhookHost deploy.example.com
 pulumi config set webhookSecret --secret
-pulumi config set ddnsHost deploy
-pulumi config set ddnsDomain example.com
+pulumi config set ddnsRecords '[{"host":"rtmp","domain":"example.com"},{"host":"deploy","domain":"example.com"}]'
 pulumi config set ddnsPassword --secret
 pulumi config set gpgPrivateKey --secret < gpg-private-key.asc
 pulumi config set firewallRules "$(jq -c . firewall-rules.example.json)"
@@ -95,11 +94,12 @@ Create a repository webhook with:
 - Events: Releases
 
 DNS for `webhookHost` must point at the instance so Caddy can obtain its TLS
-certificate. The host updates the matching Namecheap Dynamic DNS record at boot
-and every five minutes using `ddnsHost`, `ddnsDomain`, and the secret
-`ddnsPassword`. `webhookHost` must equal that record's fully-qualified domain
-name. The Vultr firewall must admit public TCP 80 and 443 for ACME and the
-webhook. The internal listener port must not be exposed.
+certificate. The host updates every Namecheap Dynamic DNS record in
+`ddnsRecords` at boot and every five minutes using the secret `ddnsPassword`.
+The list must include the fully-qualified `webhookHost`; it can also include
+application records such as `rtmp.example.com`. The Vultr firewall must admit
+public TCP 80 and 443 for ACME and the webhook. The internal listener port must
+not be exposed.
 
 ## Adding applications
 

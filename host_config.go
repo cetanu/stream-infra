@@ -41,8 +41,12 @@ type deploymentConfig struct {
 	Event             string
 	Action            string
 	ListenPort        int
-	DDNSHost          string
-	DDNSDomain        string
+	DDNSRecords       []ddnsRecord
+}
+
+type ddnsRecord struct {
+	Host   string `json:"host"`
+	Domain string `json:"domain"`
 }
 
 type stateRepository struct {
@@ -147,10 +151,13 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 			deployment.WebhookPath,
 			deployment.ListenPort,
 		)
+		ddnsRecordValues := make([]string, 0, len(deployment.DDNSRecords))
+		for _, record := range deployment.DDNSRecords {
+			ddnsRecordValues = append(ddnsRecordValues, record.Host+":"+record.Domain)
+		}
 		ddnsEnvironment := fmt.Sprintf(
-			"DDNS_HOST=%q\nDDNS_DOMAIN=%q\nDDNS_PASSWORD=%q\n",
-			deployment.DDNSHost,
-			deployment.DDNSDomain,
+			"DDNS_RECORDS=%q\nDDNS_PASSWORD=%q\n",
+			strings.Join(ddnsRecordValues, " "),
 			ddnsPassword,
 		)
 		saltConfigBytes, err := yaml.Marshal(saltMinionConfig{
@@ -265,20 +272,36 @@ func loadDeploymentConfig(cfg *config.Config) (deploymentConfig, error) {
 	if !validHostname(host) {
 		return deploymentConfig{}, fmt.Errorf("'webhookHost' must be a DNS hostname")
 	}
-	ddnsHost := strings.TrimSpace(cfg.Require("ddnsHost"))
-	ddnsDomain := strings.TrimSpace(cfg.Require("ddnsDomain"))
-	if ddnsHost == "" || !validHostname(ddnsDomain) {
-		return deploymentConfig{}, fmt.Errorf("'ddnsHost' and a valid 'ddnsDomain' are required")
+	var ddnsRecords []ddnsRecord
+	if err := json.Unmarshal([]byte(cfg.Require("ddnsRecords")), &ddnsRecords); err != nil {
+		return deploymentConfig{}, fmt.Errorf("invalid 'ddnsRecords': %w", err)
 	}
-	ddnsFQDN := ddnsDomain
-	if ddnsHost != "@" {
-		if !validHostname(ddnsHost) || strings.Contains(ddnsHost, ".") {
-			return deploymentConfig{}, fmt.Errorf("'ddnsHost' must be '@' or a single DNS label")
+	if len(ddnsRecords) == 0 {
+		return deploymentConfig{}, fmt.Errorf("'ddnsRecords' must contain at least one record")
+	}
+	seenDDNSRecords := make(map[string]bool, len(ddnsRecords))
+	webhookRecordFound := false
+	for index := range ddnsRecords {
+		record := &ddnsRecords[index]
+		record.Host = strings.TrimSpace(record.Host)
+		record.Domain = strings.TrimSpace(record.Domain)
+		if (record.Host != "@" && (!validHostname(record.Host) || strings.Contains(record.Host, "."))) ||
+			!validHostname(record.Domain) {
+			return deploymentConfig{}, fmt.Errorf("DDNS record %d requires host '@' or a single DNS label and a valid domain", index)
 		}
-		ddnsFQDN = ddnsHost + "." + ddnsDomain
+		fqdn := record.Domain
+		if record.Host != "@" {
+			fqdn = record.Host + "." + record.Domain
+		}
+		fqdn = strings.ToLower(fqdn)
+		if seenDDNSRecords[fqdn] {
+			return deploymentConfig{}, fmt.Errorf("DDNS record %d duplicates %q", index, fqdn)
+		}
+		seenDDNSRecords[fqdn] = true
+		webhookRecordFound = webhookRecordFound || strings.EqualFold(host, fqdn)
 	}
-	if !strings.EqualFold(host, ddnsFQDN) {
-		return deploymentConfig{}, fmt.Errorf("'webhookHost' must match the DDNS record %q", ddnsFQDN)
+	if !webhookRecordFound {
+		return deploymentConfig{}, fmt.Errorf("'ddnsRecords' must include webhook host %q", host)
 	}
 	path := valueOrDefault(cfg.Get("webhookPath"), "/hooks/github")
 	if !validWebhookPath(path) {
@@ -295,8 +318,7 @@ func loadDeploymentConfig(cfg *config.Config) (deploymentConfig, error) {
 		Event:             valueOrDefault(cfg.Get("webhookEvent"), "release"),
 		Action:            valueOrDefault(cfg.Get("webhookAction"), "published"),
 		ListenPort:        port,
-		DDNSHost:          ddnsHost,
-		DDNSDomain:        ddnsDomain,
+		DDNSRecords:       ddnsRecords,
 	}, nil
 }
 
