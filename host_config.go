@@ -86,6 +86,9 @@ var deploymentReconcileService string
 //go:embed host/reconcile-deployments.sh
 var reconcileDeployments string
 
+//go:embed host/import-salt-gpg-key.sh
+var importSaltGPGKey string
+
 //go:embed host/caddy.service
 var caddyService string
 
@@ -198,6 +201,7 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 			WriteFiles: []writeFile{
 				{Path: "/usr/local/libexec/deployment-webhook", Content: deploymentWebhook, Permissions: "0755"},
 				{Path: "/usr/local/libexec/reconcile-deployments", Content: reconcileDeployments, Permissions: "0755"},
+				{Path: "/usr/local/libexec/import-salt-gpg-key", Content: importSaltGPGKey, Permissions: "0755"},
 				{Path: "/usr/local/libexec/update-ddns", Content: updateDDNSScript, Permissions: "0755"},
 				{Path: "/etc/deployment-webhook.json", Content: string(listenerJSON) + "\n", Permissions: "0600"},
 				{Path: "/etc/default/update-ddns", Content: ddnsEnvironment, Permissions: "0600"},
@@ -214,12 +218,12 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 				{Path: "/etc/systemd/system/update-ddns.timer", Content: updateDDNSTimer, Permissions: "0644"},
 			},
 			RunCommands: []string{
+				"set -eu",
 				"id deployment-webhook >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin deployment-webhook",
 				"id caddy >/dev/null 2>&1 || useradd --system --home-dir /var/lib/caddy --create-home --shell /usr/sbin/nologin caddy",
 				"chown deployment-webhook:deployment-webhook /etc/deployment-webhook.json",
-				"install -d -o root -g root -m 0700 /etc/salt/gpgkeys",
-				"gpg --batch --homedir /etc/salt/gpgkeys --import /run/deployment-gpg-private-key.asc",
-				"rm -f /run/deployment-gpg-private-key.asc",
+				"/usr/local/libexec/import-salt-gpg-key",
+				"if command -v ufw >/dev/null 2>&1; then ufw --force disable; fi",
 				"install -d -o deployment-webhook -g deployment-webhook -m 0750 /var/lib/deployment-reconciler",
 				"install -d -o root -g root -m 0755 /etc/caddy/apps",
 				"curl -fsSL --retry 3 'https://caddyserver.com/api/download?os=linux&arch=amd64' -o /usr/local/bin/caddy",
