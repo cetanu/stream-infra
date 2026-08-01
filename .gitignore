@@ -21,4 +21,4 @@ bin/
 
 *.key
 *.pem
-pillar.sls
+gpg-private-key.asc

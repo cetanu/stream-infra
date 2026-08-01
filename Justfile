@@ -10,9 +10,9 @@ deploy:
     pulumi up
     popd
 
-configure-pillar file="pillar.sls":
+configure-gpg-key file:
     #!/usr/bin/env bash
     set -euo pipefail
     pushd infra
-    pulumi config set pillar --secret "$(< ../{{file}})"
+    pulumi config set gpgPrivateKey --secret "$(< ../{{file}})"
     popd
