@@ -1,5 +1,6 @@
 use crate::server::state::ProxyState;
 use crate::web::components::ui::card::{card, card_content};
+use crate::web::components::ui::link::text_link;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use topcoat::{
@@ -33,7 +34,7 @@ pub async fn metrics_grid(cx: &Cx) -> Result {
         <section class="mb-8">
             <div class="flex items-center justify-between mb-3">
                 <h2 class="text-sm font-medium text-muted-foreground">"Current activity"</h2>
-                <a href="/" class="text-sm font-medium underline underline-offset-4">"Refresh metrics"</a>
+                text_link(attrs: topcoat::view::attributes! { href="/" }, "Refresh metrics")
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 metric_card(id: "metric_streams", value: active_streams.to_string(), "Active Streams")

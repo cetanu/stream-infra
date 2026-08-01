@@ -63,25 +63,25 @@
     if (!status.active) {
       if (lastActive) detachPreview();
       badge.textContent = "Offline";
-      badge.className = "mt-2 w-fit rounded-full bg-muted px-3 py-1 text-xs font-semibold uppercase tracking-wide sm:mt-0";
+      badge.dataset.state = "offline";
       detail.textContent = "Waiting for an RTMP stream. Nothing will be sent to external targets automatically.";
       placeholder.textContent = "Start streaming to the RTMP ingest to create a preview.";
       placeholder.classList.remove("hidden");
     } else if (status.preview_failed) {
       if (previewAttached) detachPreview();
       badge.textContent = "Preview error";
-      badge.className = "mt-2 w-fit rounded-full bg-destructive px-3 py-1 text-xs font-semibold uppercase tracking-wide text-destructive-foreground sm:mt-0";
+      badge.dataset.state = "error";
       detail.textContent = "The HLS preview process stopped. Check the server logs, then reconnect the RTMP stream.";
       placeholder.textContent = "HLS preview unavailable.";
       placeholder.classList.remove("hidden");
     } else if (status.published) {
       badge.textContent = "Live";
-      badge.className = "mt-2 w-fit rounded-full bg-destructive px-3 py-1 text-xs font-semibold uppercase tracking-wide text-destructive-foreground sm:mt-0";
+      badge.dataset.state = "live";
       detail.textContent = "Publishing to enabled targets. The local preview remains available.";
       placeholder.classList.toggle("hidden", status.preview_ready);
     } else {
       badge.textContent = "Staged";
-      badge.className = "mt-2 w-fit rounded-full bg-primary px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary-foreground sm:mt-0";
+      badge.dataset.state = "staged";
       detail.textContent = status.preview_ready
         ? "Preview ready. Review it before publishing to enabled targets."
         : "Stream connected. Preparing the HLS preview…";

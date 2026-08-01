@@ -24,10 +24,8 @@ use topcoat::{
 pub mod auth;
 pub mod components;
 use components::{
-    actions_panel::actions_panel, chat_inbox::chat_inbox, chat_settings::chat_settings,
-    config_transfer::config_transfer, metrics::metrics_grid, notifications::notifications,
-    server_settings::server_settings, stream_preview::stream_preview, targets::targets,
-    web_auth::web_auth,
+    chat_inbox::chat_inbox, config_transfer::config_transfer,
+    configuration_form::configuration_form, metrics::metrics_grid, stream_preview::stream_preview,
 };
 
 pub(crate) const TAILWIND_STYLESHEET: topcoat::asset::Asset = topcoat::tailwind::stylesheet!();
@@ -82,14 +80,7 @@ async fn home() -> Result {
                 stream_preview()
                 chat_inbox()
 
-                <form id="configForm" method="post" action="/api/config" class="grid grid-cols-1 gap-6 lg:grid-cols-2 relative">
-                    <div class="min-w-0">server_settings()</div>
-                    <div class="min-w-0">web_auth()</div>
-                    <div class="min-w-0">chat_settings()</div>
-                    <div class="min-w-0">notifications()</div>
-                    <div class="min-w-0 lg:col-span-2">targets()</div>
-                    <div class="min-w-0 lg:col-span-2">actions_panel()</div>
-                </form>
+                configuration_form()
                 config_transfer()
             </div>
         </body>
