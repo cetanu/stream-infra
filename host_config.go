@@ -149,7 +149,7 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 		}
 
 		caddyConfig := fmt.Sprintf(
-			"%s {\n\thandle %s {\n\t\treverse_proxy 127.0.0.1:%d\n\t}\n\timport /etc/caddy/apps/*.caddy\n}\n",
+			"%s {\n\thandle %s {\n\t\treverse_proxy 127.0.0.1:%d\n\t}\n}\n\nimport /etc/caddy/apps/*.caddy\n",
 			deployment.WebhookHost,
 			deployment.WebhookPath,
 			deployment.ListenPort,
