@@ -41,6 +41,8 @@ type deploymentConfig struct {
 	Event             string
 	Action            string
 	ListenPort        int
+	DDNSHost          string
+	DDNSDomain        string
 }
 
 type stateRepository struct {
@@ -83,15 +85,29 @@ var reconcileDeployments string
 //go:embed host/caddy.service
 var caddyService string
 
+//go:embed host/update-ddns.sh
+var updateDDNSScript string
+
+//go:embed host/update-ddns.service
+var updateDDNSService string
+
+//go:embed host/update-ddns.timer
+var updateDDNSTimer string
+
 func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 	deployment, err := loadDeploymentConfig(cfg)
 	if err != nil {
 		return pulumi.StringOutput{}, err
 	}
 
-	return pulumi.All(cfg.RequireSecret("webhookSecret"), cfg.RequireSecret("gpgPrivateKey")).ApplyT(func(secrets []interface{}) (string, error) {
+	return pulumi.All(
+		cfg.RequireSecret("webhookSecret"),
+		cfg.RequireSecret("gpgPrivateKey"),
+		cfg.RequireSecret("ddnsPassword"),
+	).ApplyT(func(secrets []interface{}) (string, error) {
 		secret := secrets[0].(string)
 		gpgPrivateKey := secrets[1].(string)
+		ddnsPassword := secrets[2].(string)
 		repositoryIDs := make([]int64, 0, len(deployment.StateRepositories))
 		gitFSRemotes := make([]map[string][]map[string]string, 0, len(deployment.StateRepositories))
 		gitPillarRemotes := make([]map[string][]map[string]string, 0, len(deployment.StateRepositories))
@@ -131,6 +147,12 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 			deployment.WebhookPath,
 			deployment.ListenPort,
 		)
+		ddnsEnvironment := fmt.Sprintf(
+			"DDNS_HOST=%q\nDDNS_DOMAIN=%q\nDDNS_PASSWORD=%q\n",
+			deployment.DDNSHost,
+			deployment.DDNSDomain,
+			ddnsPassword,
+		)
 		saltConfigBytes, err := yaml.Marshal(saltMinionConfig{
 			FileClient:        "local",
 			FileserverBackend: []string{"roots", "gitfs"},
@@ -169,7 +191,9 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 			WriteFiles: []writeFile{
 				{Path: "/usr/local/libexec/deployment-webhook", Content: deploymentWebhook, Permissions: "0755"},
 				{Path: "/usr/local/libexec/reconcile-deployments", Content: reconcileDeployments, Permissions: "0755"},
+				{Path: "/usr/local/libexec/update-ddns", Content: updateDDNSScript, Permissions: "0755"},
 				{Path: "/etc/deployment-webhook.json", Content: string(listenerJSON) + "\n", Permissions: "0600"},
+				{Path: "/etc/default/update-ddns", Content: ddnsEnvironment, Permissions: "0600"},
 				{Path: "/run/deployment-gpg-private-key.asc", Content: gpgPrivateKey, Permissions: "0600"},
 				{Path: "/etc/salt/minion.d/deployment.conf", Content: saltConfig, Permissions: "0644"},
 				{Path: "/etc/salt/roots/top.sls", Content: string(topBytes), Permissions: "0644"},
@@ -179,6 +203,8 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 				{Path: "/etc/systemd/system/deployment-reconcile.path", Content: deploymentReconcilePath, Permissions: "0644"},
 				{Path: "/etc/systemd/system/deployment-reconcile.service", Content: deploymentReconcileService, Permissions: "0644"},
 				{Path: "/etc/systemd/system/caddy.service", Content: caddyService, Permissions: "0644"},
+				{Path: "/etc/systemd/system/update-ddns.service", Content: updateDDNSService, Permissions: "0644"},
+				{Path: "/etc/systemd/system/update-ddns.timer", Content: updateDDNSTimer, Permissions: "0644"},
 			},
 			RunCommands: []string{
 				"id deployment-webhook >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin deployment-webhook",
@@ -193,6 +219,8 @@ func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
 				"chmod 0755 /usr/local/bin/caddy",
 				"systemctl disable --now salt-minion.service || true",
 				"systemctl daemon-reload",
+				"systemctl enable --now update-ddns.timer",
+				"systemctl start update-ddns.service",
 				"systemctl enable --now caddy.service deployment-webhook.service deployment-reconcile.path",
 				"install -o deployment-webhook -g deployment-webhook -m 0640 /dev/null /var/lib/deployment-reconciler/pending",
 			},
@@ -237,6 +265,21 @@ func loadDeploymentConfig(cfg *config.Config) (deploymentConfig, error) {
 	if !validHostname(host) {
 		return deploymentConfig{}, fmt.Errorf("'webhookHost' must be a DNS hostname")
 	}
+	ddnsHost := strings.TrimSpace(cfg.Require("ddnsHost"))
+	ddnsDomain := strings.TrimSpace(cfg.Require("ddnsDomain"))
+	if ddnsHost == "" || !validHostname(ddnsDomain) {
+		return deploymentConfig{}, fmt.Errorf("'ddnsHost' and a valid 'ddnsDomain' are required")
+	}
+	ddnsFQDN := ddnsDomain
+	if ddnsHost != "@" {
+		if !validHostname(ddnsHost) || strings.Contains(ddnsHost, ".") {
+			return deploymentConfig{}, fmt.Errorf("'ddnsHost' must be '@' or a single DNS label")
+		}
+		ddnsFQDN = ddnsHost + "." + ddnsDomain
+	}
+	if !strings.EqualFold(host, ddnsFQDN) {
+		return deploymentConfig{}, fmt.Errorf("'webhookHost' must match the DDNS record %q", ddnsFQDN)
+	}
 	path := valueOrDefault(cfg.Get("webhookPath"), "/hooks/github")
 	if !validWebhookPath(path) {
 		return deploymentConfig{}, fmt.Errorf("'webhookPath' must be an absolute URL path")
@@ -252,6 +295,8 @@ func loadDeploymentConfig(cfg *config.Config) (deploymentConfig, error) {
 		Event:             valueOrDefault(cfg.Get("webhookEvent"), "release"),
 		Action:            valueOrDefault(cfg.Get("webhookAction"), "published"),
 		ListenPort:        port,
+		DDNSHost:          ddnsHost,
+		DDNSDomain:        ddnsDomain,
 	}, nil
 }
 
