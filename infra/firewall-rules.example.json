@@ -1,0 +1,20 @@
+[
+  {
+    "name": "http",
+    "protocol": "tcp",
+    "ipType": "v4",
+    "subnet": "0.0.0.0",
+    "subnetSize": 0,
+    "port": "80",
+    "notes": "Public HTTP"
+  },
+  {
+    "name": "https",
+    "protocol": "tcp",
+    "ipType": "v4",
+    "subnet": "0.0.0.0",
+    "subnetSize": 0,
+    "port": "443",
+    "notes": "Public HTTPS"
+  }
+]

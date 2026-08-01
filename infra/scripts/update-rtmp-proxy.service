@@ -1,9 +1,0 @@
-[Unit]
-Description=Update RTMP Proxy binary
-Wants=network-online.target
-After=network-online.target setup-rtmp-proxy.service
-Requires=setup-rtmp-proxy.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/update-rtmp-proxy.sh

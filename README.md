@@ -1,24 +1,14 @@
 # stream-infra
 
-`stream-infra` is a self-hosted live-stream multiplexer. It accepts one RTMP
-ingest and relays it to multiple configured destinations such as Twitch,
-YouTube, and X.
+Application-agnostic Pulumi infrastructure for a small Vultr compute node.
 
-The Rust service includes a server-rendered Topcoat dashboard for managing
-stream targets, notifications, access credentials, and chat integrations
-without handwritten JavaScript. Its unified chat inbox combines messages from
-multiple platforms into a bounded queue, presenting one message at a time until
-it is acknowledged.
+Pulumi provisions the stable host, firewall, Caddy, and a signed GitHub webhook
+listener. Webhooks activate a masterless Salt reconciliation through systemd.
+Salt loads each application's formula directly from its own Git repository via
+GitFS, allowing applications to be replaced and restarted without updating or
+replacing the compute node.
 
-Application configuration and chat state use SQLite. The production
-infrastructure is managed with Pulumi on Vultr; application state is managed
-separately from the deployment and is not provisioned as Block Storage.
+The RTMP application now lives at
+[`cetanu/rtmp-manager`](https://github.com/cetanu/rtmp-manager).
 
-## Components
-
-- Rust RTMP ingest, relay, health, and web services
-- Topcoat-based configuration and chat dashboard
-- Anonymous Twitch IRC and YouTube Live chat ingestion
-- SQLite-backed configuration and chat queue
-- Caddy TLS termination
-- Pulumi-managed Vultr compute, networking, and firewall
+See [`infra/README.md`](infra/README.md) for configuration and deployment.

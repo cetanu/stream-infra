@@ -1,7 +1,7 @@
 package main
 
 import (
-	_ "embed"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -10,297 +10,90 @@ import (
 	"github.com/dirien/pulumi-vultr/sdk/v2/go/vultr"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
-	"gopkg.in/yaml.v3"
 )
 
-type CloudConfig struct {
-	PackageUpdate bool        `yaml:"package_update"`
-	Packages      []string    `yaml:"packages"`
-	WriteFiles    []WriteFile `yaml:"write_files,omitempty"`
-	RunCmd        []string    `yaml:"runcmd"`
+type firewallRule struct {
+	Name       string `json:"name"`
+	Protocol   string `json:"protocol"`
+	IPType     string `json:"ipType"`
+	Subnet     string `json:"subnet"`
+	SubnetSize int    `json:"subnetSize"`
+	Port       string `json:"port,omitempty"`
+	Notes      string `json:"notes,omitempty"`
 }
 
-type WriteFile struct {
-	Path        string `yaml:"path"`
-	Content     string `yaml:"content"`
-	Permissions string `yaml:"permissions,omitempty"`
-	Encoding    string `yaml:"encoding,omitempty"`
+type infrastructureConfig struct {
+	resourcePrefix string
+	description    string
+	region         string
+	plan           string
+	osID           int
+	label          string
+	hostname       string
+	vpcSubnet      string
+	vpcSubnetMask  int
+	enableIPv6     bool
+	backups        string
+	firewallRules  []firewallRule
 }
-
-//go:embed scripts/update-ddns.sh
-var updateDdnsScript string
-
-//go:embed scripts/update-ddns.service
-var updateDdnsService string
-
-//go:embed scripts/setup-rtmp-proxy.sh
-var setupRtmpProxyScript string
-
-//go:embed scripts/setup-rtmp-proxy.service
-var setupRtmpProxyService string
-
-//go:embed scripts/update-rtmp-proxy.sh
-var updateRtmpProxyScript string
-
-//go:embed scripts/update-rtmp-proxy.service
-var updateRtmpProxyService string
-
-//go:embed scripts/update-rtmp-proxy.timer
-var updateRtmpProxyTimer string
-
-//go:embed scripts/caddy.service
-var caddyService string
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
 		cfg := config.New(ctx, "")
-		region := cfg.Get("region")
-		if region == "" {
-			region = RegionSydney
+		infra, err := loadInfrastructureConfig(cfg, ctx.Stack())
+		if err != nil {
+			return err
 		}
 
-		allowedIp := cfg.Get("allowedIngressIp")
-		if strings.TrimSpace(allowedIp) == "" {
-			return fmt.Errorf("'allowedIngressIp' configuration is required. Run: pulumi config set allowedIngressIp <YOUR_IP>")
+		userData, err := buildHostCloudConfig(cfg)
+		if err != nil {
+			return err
 		}
 
-		subnetIp := strings.TrimSpace(allowedIp)
-		subnetSize := 32
+		vpc, err := vultr.NewVpc(ctx, infra.resourcePrefix+"-vpc", &vultr.VpcArgs{
+			Description:  pulumi.String(infra.description),
+			Region:       pulumi.String(infra.region),
+			V4Subnet:     pulumi.String(infra.vpcSubnet),
+			V4SubnetMask: pulumi.Int(infra.vpcSubnetMask),
+		})
+		if err != nil {
+			return err
+		}
 
-		if strings.Contains(subnetIp, "/") {
-			parts := strings.Split(subnetIp, "/")
-			subnetIp = parts[0]
-			if sz, err := strconv.Atoi(parts[1]); err == nil && sz >= 0 && sz <= 32 {
-				subnetSize = sz
-			} else {
-				return fmt.Errorf("Invalid CIDR prefix in 'allowedIngressIp': %q", allowedIp)
+		fwGroup, err := vultr.NewFirewallGroup(ctx, infra.resourcePrefix+"-fw", &vultr.FirewallGroupArgs{
+			Description: pulumi.String(infra.description),
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, rule := range infra.firewallRules {
+			_, err = vultr.NewFirewallRule(ctx, infra.resourcePrefix+"-allow-"+rule.Name, &vultr.FirewallRuleArgs{
+				FirewallGroupId: fwGroup.ID(),
+				Protocol:        pulumi.String(rule.Protocol),
+				IpType:          pulumi.String(rule.IPType),
+				Subnet:          pulumi.String(rule.Subnet),
+				SubnetSize:      pulumi.Int(rule.SubnetSize),
+				Port:            pulumi.String(rule.Port),
+				Notes:           pulumi.String(rule.Notes),
+			}, pulumi.IgnoreChanges([]string{"source"}))
+			if err != nil {
+				return err
 			}
 		}
 
-		if net.ParseIP(subnetIp) == nil {
-			return fmt.Errorf("'allowedIngressIp' %q is not a valid IPv4 address", subnetIp)
-		}
-
-		customConfig := cfg.RequireSecret("rtmpConfig")
-		webUsername := strings.TrimSpace(cfg.Require("webUsername"))
-		if webUsername == "" {
-			return fmt.Errorf("'webUsername' configuration is required")
-		}
-		webPassword := cfg.RequireSecret("webPassword")
-
-		ddnsHost := cfg.Get("ddnsHost")
-		ddnsDomain := cfg.Get("ddnsDomain")
-		ddnsPassword := cfg.RequireSecret("ddnsPassword")
-
-		if ddnsHost == "" {
-			ddnsHost = "@"
-		}
-
-		fqdn := ddnsDomain
-		if ddnsHost != "@" {
-			fqdn = fmt.Sprintf("%s.%s", ddnsHost, ddnsDomain)
-		}
-
-		userData := pulumi.All(customConfig, webPassword, ddnsPassword).ApplyT(
-			func(secrets []interface{}) (string, error) {
-				rtmpConfig := secrets[0].(string)
-				password := secrets[1].(string)
-				ddnsSecret := secrets[2].(string)
-				cc := CloudConfig{
-					PackageUpdate: true,
-					Packages: []string{
-						"ffmpeg",
-						"curl",
-						"ca-certificates",
-						"ufw",
-					},
-					WriteFiles: []WriteFile{
-						{
-							Path:        "/run/rtmp-proxy-bootstrap/config.toml",
-							Content:     rtmpConfig,
-							Permissions: "0600",
-						},
-						{
-							Path: "/etc/rtmp-proxy.env",
-							Content: fmt.Sprintf(
-								"WEB_AUTH_BOOTSTRAP_USERNAME=%q\nWEB_AUTH_BOOTSTRAP_PASSWORD=%q\n",
-								webUsername,
-								password,
-							),
-							Permissions: "0600",
-						},
-						{
-							Path:        "/usr/local/bin/setup-rtmp-proxy.sh",
-							Content:     setupRtmpProxyScript,
-							Permissions: "0755",
-						},
-						{
-							Path:        "/etc/systemd/system/setup-rtmp-proxy.service",
-							Content:     setupRtmpProxyService,
-							Permissions: "0644",
-						},
-						{
-							Path:        "/usr/local/bin/update-rtmp-proxy.sh",
-							Content:     updateRtmpProxyScript,
-							Permissions: "0755",
-						},
-						{
-							Path:        "/etc/systemd/system/update-rtmp-proxy.service",
-							Content:     updateRtmpProxyService,
-							Permissions: "0644",
-						},
-						{
-							Path:        "/etc/systemd/system/update-rtmp-proxy.timer",
-							Content:     updateRtmpProxyTimer,
-							Permissions: "0644",
-						},
-						{
-							Path:        "/etc/default/update-ddns",
-							Content:     fmt.Sprintf("DDNS_HOST=%q\nDDNS_DOMAIN=%q\nDDNS_PASSWORD=%q\n", ddnsHost, ddnsDomain, ddnsSecret),
-							Permissions: "0600",
-						},
-						{
-							Path:        "/usr/local/bin/update-ddns.sh",
-							Content:     updateDdnsScript,
-							Permissions: "0755",
-						},
-						{
-							Path:        "/etc/systemd/system/update-ddns.service",
-							Content:     updateDdnsService,
-							Permissions: "0644",
-						},
-						{
-							Path:        "/etc/caddy/Caddyfile",
-							Content:     fmt.Sprintf("%s {\n\treverse_proxy 127.0.0.1:3000\n}\n", fqdn),
-							Permissions: "0644",
-						},
-						{
-							Path:        "/etc/systemd/system/caddy.service",
-							Content:     caddyService,
-							Permissions: "0644",
-						},
-					},
-					RunCmd: []string{
-						"curl -fsSL 'https://caddyserver.com/api/download?os=linux&arch=amd64' -o /usr/local/bin/caddy",
-						"chmod +x /usr/local/bin/caddy",
-						"ufw allow 1935/tcp || true",
-						"ufw allow 80/tcp || true",
-						"ufw allow 443/tcp || true",
-						"systemctl daemon-reload",
-						"systemctl enable --now caddy.service",
-						"systemctl enable setup-rtmp-proxy.service",
-						"systemctl start --no-block setup-rtmp-proxy.service",
-						"systemctl enable --now update-rtmp-proxy.timer",
-						"systemctl enable --now update-ddns.service",
-					},
-				}
-
-				ccBytes, err := yaml.Marshal(cc)
-				if err != nil {
-					return "", err
-				}
-				return "#cloud-config\n" + string(ccBytes), nil
-			},
-		).(pulumi.StringOutput)
-
-		vpc, err := vultr.NewVpc(ctx, "stream-vpc", &vultr.VpcArgs{
-			Description:  pulumi.String("VPC for RTMP stream-infra services"),
-			Region:       pulumi.String(region),
-			V4Subnet:     pulumi.String("10.0.0.0"),
-			V4SubnetMask: pulumi.Int(24),
-		})
-		if err != nil {
-			return err
-		}
-
-		fwGroup, err := vultr.NewFirewallGroup(ctx, "stream-fw", &vultr.FirewallGroupArgs{
-			Description: pulumi.String("Firewall rules for RTMP Proxy & Multiplexer"),
-		})
-		if err != nil {
-			return err
-		}
-
-		_, err = vultr.NewFirewallRule(ctx, "stream-allow-rtmp", &vultr.FirewallRuleArgs{
-			FirewallGroupId: fwGroup.ID(),
-			Protocol:        pulumi.String("tcp"),
-			IpType:          pulumi.String("v4"),
-			Subnet:          pulumi.String(subnetIp),
-			SubnetSize:      pulumi.Int(subnetSize),
-			Port:            pulumi.String("1935"),
-			Notes:           pulumi.String("Allow inbound RTMP streaming from whitelisted IP"),
-		}, pulumi.IgnoreChanges([]string{"source"}))
-		if err != nil {
-			return err
-		}
-
-		_, err = vultr.NewFirewallRule(ctx, "stream-allow-http", &vultr.FirewallRuleArgs{
-			FirewallGroupId: fwGroup.ID(),
-			Protocol:        pulumi.String("tcp"),
-			IpType:          pulumi.String("v4"),
-			Subnet:          pulumi.String("0.0.0.0"),
-			SubnetSize:      pulumi.Int(0),
-			Port:            pulumi.String("80"),
-			Notes:           pulumi.String("Allow HTTP globally for Let's Encrypt ACME HTTP-01 challenge"),
-		}, pulumi.IgnoreChanges([]string{"source"}))
-		if err != nil {
-			return err
-		}
-
-		_, err = vultr.NewFirewallRule(ctx, "stream-allow-http-v6", &vultr.FirewallRuleArgs{
-			FirewallGroupId: fwGroup.ID(),
-			Protocol:        pulumi.String("tcp"),
-			IpType:          pulumi.String("v6"),
-			Subnet:          pulumi.String("::"),
-			SubnetSize:      pulumi.Int(0),
-			Port:            pulumi.String("80"),
-			Notes:           pulumi.String("Allow IPv6 HTTP globally for Let's Encrypt ACME HTTP-01 challenge"),
-		}, pulumi.IgnoreChanges([]string{"source"}))
-		if err != nil {
-			return err
-		}
-
-		_, err = vultr.NewFirewallRule(ctx, "stream-allow-https", &vultr.FirewallRuleArgs{
-			FirewallGroupId: fwGroup.ID(),
-			Protocol:        pulumi.String("tcp"),
-			IpType:          pulumi.String("v4"),
-			Subnet:          pulumi.String("0.0.0.0"),
-			SubnetSize:      pulumi.Int(0),
-			Port:            pulumi.String("443"),
-			Notes:           pulumi.String("Allow HTTPS globally for authenticated web access"),
-		}, pulumi.IgnoreChanges([]string{"source"}))
-		if err != nil {
-			return err
-		}
-
-		_, err = vultr.NewFirewallRule(ctx, "stream-allow-https-v6", &vultr.FirewallRuleArgs{
-			FirewallGroupId: fwGroup.ID(),
-			Protocol:        pulumi.String("tcp"),
-			IpType:          pulumi.String("v6"),
-			Subnet:          pulumi.String("::"),
-			SubnetSize:      pulumi.Int(0),
-			Port:            pulumi.String("443"),
-			Notes:           pulumi.String("Allow IPv6 HTTPS globally for authenticated web access"),
-		}, pulumi.IgnoreChanges([]string{"source"}))
-		if err != nil {
-			return err
-		}
-
-		server, err := vultr.NewInstance(ctx, "stream-rtmp-node", &vultr.InstanceArgs{
-			Plan:            pulumi.String(PlanCloudCompute1vCPU1GB),
-			Region:          pulumi.String(region),
-			OsId:            pulumi.Int(OsUbuntu2204LTSx64),
-			Label:           pulumi.String("rtmp-proxy-node"),
-			Hostname:        pulumi.String("rtmp-proxy-1"),
+		server, err := vultr.NewInstance(ctx, infra.resourcePrefix+"-node", &vultr.InstanceArgs{
+			Plan:            pulumi.String(infra.plan),
+			Region:          pulumi.String(infra.region),
+			OsId:            pulumi.Int(infra.osID),
+			Label:           pulumi.String(infra.label),
+			Hostname:        pulumi.String(infra.hostname),
 			UserData:        userData,
 			VpcIds:          pulumi.StringArray{vpc.ID()},
 			FirewallGroupId: fwGroup.ID(),
-			EnableIpv6:      pulumi.Bool(true),
-			Backups:         pulumi.String("disabled"),
-		},
-			// Vultr can update user-data without replacing the instance, preserving
-			// Caddy's ACME storage on the instance root disk.
-			pulumi.DeleteBeforeReplace(true),
-		)
+			EnableIpv6:      pulumi.Bool(infra.enableIPv6),
+			Backups:         pulumi.String(infra.backups),
+		}, pulumi.DeleteBeforeReplace(true))
 		if err != nil {
 			return err
 		}
@@ -309,7 +102,98 @@ func main() {
 		ctx.Export("firewallGroupId", fwGroup.ID())
 		ctx.Export("instanceId", server.ID())
 		ctx.Export("instanceMainIp", server.MainIp)
-
 		return nil
 	})
+}
+
+func loadInfrastructureConfig(cfg *config.Config, stackName string) (infrastructureConfig, error) {
+	prefix := valueOrDefault(cfg.Get("resourcePrefix"), stackName)
+	if !validResourceName(prefix) {
+		return infrastructureConfig{}, fmt.Errorf("'resourcePrefix' must contain only letters, numbers, and hyphens")
+	}
+
+	rules, err := parseFirewallRules(cfg.Require("firewallRules"))
+	if err != nil {
+		return infrastructureConfig{}, fmt.Errorf("invalid 'firewallRules': %w", err)
+	}
+
+	return infrastructureConfig{
+		resourcePrefix: prefix,
+		description:    valueOrDefault(cfg.Get("description"), "Application host managed by Pulumi"),
+		region:         valueOrDefault(cfg.Get("region"), RegionSydney),
+		plan:           valueOrDefault(cfg.Get("plan"), PlanCloudCompute1vCPU1GB),
+		osID:           intOrDefault(cfg.Get("osId"), OsUbuntu2204LTSx64),
+		label:          valueOrDefault(cfg.Get("label"), prefix+"-node"),
+		hostname:       valueOrDefault(cfg.Get("hostname"), prefix+"-1"),
+		vpcSubnet:      valueOrDefault(cfg.Get("vpcSubnet"), "10.0.0.0"),
+		vpcSubnetMask:  intOrDefault(cfg.Get("vpcSubnetMask"), 24),
+		enableIPv6:     boolOrDefault(cfg.Get("enableIPv6"), true),
+		backups:        valueOrDefault(cfg.Get("backups"), "disabled"),
+		firewallRules:  rules,
+	}, nil
+}
+
+func parseFirewallRules(raw string) ([]firewallRule, error) {
+	var rules []firewallRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(rules))
+	for i, rule := range rules {
+		if !validResourceName(rule.Name) || seen[rule.Name] {
+			return nil, fmt.Errorf("rule %d has an invalid or duplicate name %q", i, rule.Name)
+		}
+		seen[rule.Name] = true
+		if rule.Protocol == "" || (rule.IPType != "v4" && rule.IPType != "v6") {
+			return nil, fmt.Errorf("rule %q requires protocol and ipType v4 or v6", rule.Name)
+		}
+		ip := net.ParseIP(rule.Subnet)
+		if ip == nil || (rule.IPType == "v4") != (ip.To4() != nil) {
+			return nil, fmt.Errorf("rule %q subnet does not match ipType", rule.Name)
+		}
+		maxPrefix := 128
+		if rule.IPType == "v4" {
+			maxPrefix = 32
+		}
+		if rule.SubnetSize < 0 || rule.SubnetSize > maxPrefix {
+			return nil, fmt.Errorf("rule %q has invalid subnetSize", rule.Name)
+		}
+	}
+	return rules, nil
+}
+
+func valueOrDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
+}
+
+func intOrDefault(value string, fallback int) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func boolOrDefault(value string, fallback bool) bool {
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func validResourceName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' {
+			return false
+		}
+	}
+	return true
 }
