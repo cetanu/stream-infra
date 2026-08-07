@@ -101,16 +101,16 @@ var updateDDNSService string
 //go:embed host/update-ddns.timer
 var updateDDNSTimer string
 
-func buildHostCloudConfig(cfg *config.Config) (pulumi.StringOutput, error) {
-	deployment, err := loadDeploymentConfig(cfg)
+func buildHostCloudConfig(rootCfg, srvCfg *config.Config) (pulumi.StringOutput, error) {
+	deployment, err := loadDeploymentConfig(srvCfg)
 	if err != nil {
 		return pulumi.StringOutput{}, err
 	}
 
 	return pulumi.All(
-		cfg.RequireSecret("webhookSecret"),
-		cfg.RequireSecret("gpgPrivateKey"),
-		cfg.RequireSecret("ddnsPassword"),
+		rootCfg.RequireSecret("webhookSecret"),
+		rootCfg.RequireSecret("gpgPrivateKey"),
+		rootCfg.RequireSecret("ddnsPassword"),
 	).ApplyT(func(secrets []interface{}) (string, error) {
 		secret := secrets[0].(string)
 		gpgPrivateKey := secrets[1].(string)

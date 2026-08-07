@@ -5,7 +5,7 @@ config:
   stream-infra:gpgPrivateKey:
     secure: v1:6/nyfD0o6tTwdq3b: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
   stream-infra:webhookHost:
-    secure: v1:MlLppk/jz0dGiCq7:OdzNRfdRMeBsIVPPGXcY7u+tEDLnZxwegy945qKsLMYanz8=
+    secure: v1:0nb0L51+5QLv5Qvb:69ZkiKn6Q8tD6oOFeDBJrLZvv+HQpHIDKvl9IAi32c1E
   stream-infra:webhookSecret:
     secure: v1:DzhnRLXUwr5ATfg4:NsTwtNJ8DKrSYeL/FMA3UCIxsmFqpCOyG7uKVR3gzZcHCkzAJGVNd0l+Xcky+jButmySF7I=
   stream-infra:stateRepositories: |-
@@ -52,4 +52,39 @@ config:
   stream-infra:ddnsPassword:
     secure: v1:1B4lAXRjlEyhS9tU:7rhSo1u1OwmczUscwtGpXdrTZJWtt/ANCsHpAeUU5z70cCvu8g+d5tGH2mKtozrj
   stream-infra:ddnsRecords:
-    secure: v1:8BAd9kphEQHZhMDF:PDBKYsPhQ5/GmnN7NEP7sbVMtRiTtmMX+FJQ1SU4h3UxY+/hOGG3S6JdIcWiCKpBPNUmNRiJN/bpAhkxSxrW6vF09gaUNQgcI1bbTvbpXJ3bb7l93XhGHqfOJIjnrCQVD83cANSYv5SCfA==
+    secure: v1:edLw/HHN0PMpsjwB:OtwpZCIK6n5wVl840hMaRQOdzQOZAxdejs0iar0eVIqzrgmBI6abnjiqZ9qi2CXTtAl06icit29d/1lb
+  stream-infra:servers: '["", "phoenix"]'
+  phoenix:ddnsRecords: '[{"host": "presence", "domain": "vsyrakis.dev"}, {"host": "presence-deploy", "domain": "vsyrakis.dev"}]'
+  phoenix:webhookHost: presence-deploy.vsyrakis.dev
+  phoenix:firewallRules: |-
+    [
+      {
+        "name":"http",
+        "protocol":"tcp",
+        "ipType":"v4",
+        "subnet":"0.0.0.0",
+        "subnetSize":0,
+        "port":"80",
+        "notes":"Public HTTP"
+      },
+      {
+        "name":"https",
+        "protocol":"tcp",
+        "ipType":"v4",
+        "subnet":"0.0.0.0",
+        "subnetSize":0,
+        "port":"443",
+        "notes":"Public HTTPS"
+      }
+    ]
+  phoenix:stateRepositories: |-
+    [
+      {
+        "url": "https://github.com/cetanu/socketything.git",
+        "branch": "master",
+        "root": "salt",
+        "pillarRoot": "pillar",
+        "state": "socketything",
+        "repositoryId": 1326662929
+      }
+    ]

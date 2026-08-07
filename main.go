@@ -40,68 +40,91 @@ type infrastructureConfig struct {
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
 		cfg := config.New(ctx, "")
-		infra, err := loadInfrastructureConfig(cfg, ctx.Stack())
-		if err != nil {
-			return err
+
+		serversRaw := cfg.Get("servers")
+		var serverNamespaces []string
+		if serversRaw != "" {
+			if err := json.Unmarshal([]byte(serversRaw), &serverNamespaces); err != nil {
+				return fmt.Errorf("invalid 'servers' config: %w", err)
+			}
+		} else {
+			serverNamespaces = []string{""}
 		}
 
-		userData, err := buildHostCloudConfig(cfg)
-		if err != nil {
-			return err
-		}
+		for _, ns := range serverNamespaces {
+			srvCfg := config.New(ctx, ns)
 
-		vpc, err := vultr.NewVpc(ctx, infra.resourcePrefix+"-vpc", &vultr.VpcArgs{
-			Description:  pulumi.String(infra.description),
-			Region:       pulumi.String(infra.region),
-			V4Subnet:     pulumi.String(infra.vpcSubnet),
-			V4SubnetMask: pulumi.Int(infra.vpcSubnetMask),
-		})
-		if err != nil {
-			return err
-		}
+			stackName := ctx.Stack()
+			if ns != "" {
+				stackName = stackName + "-" + ns
+			}
 
-		fwGroup, err := vultr.NewFirewallGroup(ctx, infra.resourcePrefix+"-fw", &vultr.FirewallGroupArgs{
-			Description: pulumi.String(infra.description),
-		})
-		if err != nil {
-			return err
-		}
-
-		for _, rule := range infra.firewallRules {
-			_, err = vultr.NewFirewallRule(ctx, infra.resourcePrefix+"-allow-"+rule.Name, &vultr.FirewallRuleArgs{
-				FirewallGroupId: fwGroup.ID(),
-				Protocol:        pulumi.String(rule.Protocol),
-				IpType:          pulumi.String(rule.IPType),
-				Subnet:          pulumi.String(rule.Subnet),
-				SubnetSize:      pulumi.Int(rule.SubnetSize),
-				Port:            pulumi.String(rule.Port),
-				Notes:           pulumi.String(rule.Notes),
-			}, pulumi.IgnoreChanges([]string{"source"}))
+			infra, err := loadInfrastructureConfig(srvCfg, stackName)
 			if err != nil {
 				return err
 			}
-		}
 
-		server, err := vultr.NewInstance(ctx, infra.resourcePrefix+"-node", &vultr.InstanceArgs{
-			Plan:            pulumi.String(infra.plan),
-			Region:          pulumi.String(infra.region),
-			OsId:            pulumi.Int(infra.osID),
-			Label:           pulumi.String(infra.label),
-			Hostname:        pulumi.String(infra.hostname),
-			UserData:        userData,
-			VpcIds:          pulumi.StringArray{vpc.ID()},
-			FirewallGroupId: fwGroup.ID(),
-			EnableIpv6:      pulumi.Bool(infra.enableIPv6),
-			Backups:         pulumi.String(infra.backups),
-		}, pulumi.DeleteBeforeReplace(true))
-		if err != nil {
-			return err
-		}
+			userData, err := buildHostCloudConfig(cfg, srvCfg)
+			if err != nil {
+				return err
+			}
 
-		ctx.Export("vpcId", vpc.ID())
-		ctx.Export("firewallGroupId", fwGroup.ID())
-		ctx.Export("instanceId", server.ID())
-		ctx.Export("instanceMainIp", server.MainIp)
+			vpc, err := vultr.NewVpc(ctx, infra.resourcePrefix+"-vpc", &vultr.VpcArgs{
+				Description:  pulumi.String(infra.description),
+				Region:       pulumi.String(infra.region),
+				V4Subnet:     pulumi.String(infra.vpcSubnet),
+				V4SubnetMask: pulumi.Int(infra.vpcSubnetMask),
+			})
+			if err != nil {
+				return err
+			}
+
+			fwGroup, err := vultr.NewFirewallGroup(ctx, infra.resourcePrefix+"-fw", &vultr.FirewallGroupArgs{
+				Description: pulumi.String(infra.description),
+			})
+			if err != nil {
+				return err
+			}
+
+			for _, rule := range infra.firewallRules {
+				_, err = vultr.NewFirewallRule(ctx, infra.resourcePrefix+"-allow-"+rule.Name, &vultr.FirewallRuleArgs{
+					FirewallGroupId: fwGroup.ID(),
+					Protocol:        pulumi.String(rule.Protocol),
+					IpType:          pulumi.String(rule.IPType),
+					Subnet:          pulumi.String(rule.Subnet),
+					SubnetSize:      pulumi.Int(rule.SubnetSize),
+					Port:            pulumi.String(rule.Port),
+					Notes:           pulumi.String(rule.Notes),
+				}, pulumi.IgnoreChanges([]string{"source"}))
+				if err != nil {
+					return err
+				}
+			}
+
+			server, err := vultr.NewInstance(ctx, infra.resourcePrefix+"-node", &vultr.InstanceArgs{
+				Plan:            pulumi.String(infra.plan),
+				Region:          pulumi.String(infra.region),
+				OsId:            pulumi.Int(infra.osID),
+				Label:           pulumi.String(infra.label),
+				Hostname:        pulumi.String(infra.hostname),
+				UserData:        userData,
+				VpcIds:          pulumi.StringArray{vpc.ID()},
+				FirewallGroupId: fwGroup.ID(),
+				EnableIpv6:      pulumi.Bool(infra.enableIPv6),
+				Backups:         pulumi.String(infra.backups),
+			},
+				pulumi.DeleteBeforeReplace(true),
+				pulumi.IgnoreChanges([]string{"userData"}),
+			)
+			if err != nil {
+				return err
+			}
+
+			ctx.Export(infra.resourcePrefix+"-vpcId", vpc.ID())
+			ctx.Export(infra.resourcePrefix+"-firewallGroupId", fwGroup.ID())
+			ctx.Export(infra.resourcePrefix+"-instanceId", server.ID())
+			ctx.Export(infra.resourcePrefix+"-instanceMainIp", server.MainIp)
+		}
 		return nil
 	})
 }
