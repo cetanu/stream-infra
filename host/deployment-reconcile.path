@@ -3,7 +3,6 @@ Description=Watch for queued application reconciliations
 
 [Path]
 PathExists=/var/lib/deployment-reconciler/pending
-PathExists=/var/lib/deployment-reconciler/processing
 Unit=deployment-reconcile.service
 
 [Install]
